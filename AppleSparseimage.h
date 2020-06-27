@@ -5,7 +5,9 @@
 
 #include <vector>
 
-class AppleSparseimage
+#include "Device.h"
+
+class AppleSparseimage : public Device
 {
 	struct HeaderNode {
 		uint32_t signature;
@@ -17,7 +19,7 @@ class AppleSparseimage
 		uint64_t total_sectors;
 		uint8_t pad[0x1C];
 		uint32_t band_id[0x3F0];
-	} __attribute__((packed));
+	} __attribute__((packed, aligned(4)));
 
 	struct IndexNode {
 		uint32_t signature;
@@ -26,7 +28,7 @@ class AppleSparseimage
 		uint64_t next_index_node_offset;
 		uint8_t pad[0x24];
 		uint32_t band_id[0x3F2];
-	} __attribute__((packed));
+	} __attribute__((packed, aligned(4)));
 
 public:
 	AppleSparseimage();
@@ -36,10 +38,10 @@ public:
 	int Open(const char *name, bool writable);
 	void Close();
 
-	int Read(void *data, size_t size, uint64_t offset);
-	int Write(const void *data, size_t size, uint64_t offset);
+	int Read(void *data, size_t size, uint64_t offset) override;
+	int Write(const void *data, size_t size, uint64_t offset) override;
 
-	uint64_t GetSize() const { return m_drive_size; }
+	uint64_t GetSize() const override { return m_drive_size; }
 
 private:
 	void ReadHeader(HeaderNode &hdr);

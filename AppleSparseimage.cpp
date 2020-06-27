@@ -54,7 +54,7 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 
 	m_writable = true;
 
-	m_fd = open(name, O_CREAT | O_RDWR, 0644);
+	m_fd = open(name, O_CREAT | O_TRUNC | O_RDWR, 0644);
 	if (m_fd < 0)
 		return errno;
 
@@ -79,7 +79,7 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 	m_band_offset.clear();
 	m_band_offset.resize((m_drive_size + m_band_size - 1) / m_band_size, 0);
 
-	return ENOTSUP;
+	return 0;
 }
 
 int AppleSparseimage::Open(const char* name, bool writable)
@@ -327,7 +327,10 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 	off = m_file_size;
 	m_file_size += m_band_size;
 	ftruncate(m_fd, m_file_size);
-	m_idx.band_id[m_next_free_band++] = band_id + 1;
+	if (m_current_node_offset == 0)
+		m_hdr.band_id[m_next_free_band++] = band_id + 1;
+	else
+		m_idx.band_id[m_next_free_band++] = band_id + 1;
 	m_band_offset[band_id] = off;
 	return off;
 }
