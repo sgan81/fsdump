@@ -1,3 +1,21 @@
+/*
+	This file is part of fsdump, a tool for dumping drives into image files.
+	Copyright (C) 2020 Simon Gander.
+
+	FSDump is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	FSDump is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with fsdump.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #pragma once
 
 #include <cstdint>
@@ -218,3 +236,91 @@ struct cib_addr_block_t
 	paddr_t     cab_cib_addr[];
 };
 
+struct spaceman_free_queue_t
+{
+	uint64_t    sfq_count;
+	oid_t       sfq_tree_oid;
+	xid_t       sfq_oldest_xid;
+	uint16_t    sfq_tree_node_limit;
+	uint16_t    sfq_pad16;
+	uint32_t    sfq_pad32;
+	uint64_t    sfq_reserved;
+};
+
+struct spaceman_device_t
+{
+	uint64_t    sm_block_count;
+	uint64_t    sm_chunk_count;
+	uint32_t    sm_cib_count;
+	uint32_t    sm_cab_count;
+	uint64_t    sm_free_count;
+	uint32_t    sm_addr_offset;
+	uint32_t    sm_reserved;
+	uint64_t    sm_reserved2;
+};
+
+struct spaceman_allocation_zone_boundaries_t
+{
+	uint64_t saz_zone_start;
+	uint64_t saz_zone_end;
+};
+
+#define SM_ALLOCZONE_INVALID_END_BOUNDARY      0
+#define SM_ALLOCZONE_NUM_PREVIOUS_BOUNDARIES   7
+
+struct spaceman_allocation_zone_info_phys_t
+{
+	spaceman_allocation_zone_boundaries_t   saz_current_boundaries;
+	spaceman_allocation_zone_boundaries_t   saz_previous_boundaries[SM_ALLOCZONE_NUM_PREVIOUS_BOUNDARIES];
+	uint16_t saz_zone_id;
+	uint16_t saz_previous_boundary_index;
+	uint32_t saz_reserved;
+};
+
+enum sfq {
+	SFQ_IP = 0,
+	SFQ_MAIN = 1,
+	SFQ_TIER2 = 2,
+	SFQ_COUNT = 3
+};
+
+enum smdev {
+	SD_MAIN = 0,
+	SD_TIER2 = 1,
+	SD_COUNT = 2
+};
+
+#define SM_DATAZONE_ALLOCZONE_COUNT 8
+
+struct spaceman_datazone_info_phys_t
+{
+	spaceman_allocation_zone_info_phys_t sdz_allocation_zones[SD_COUNT][SM_DATAZONE_ALLOCZONE_COUNT];
+};
+
+struct spaceman_phys_t
+{
+	obj_phys_t                      sm_o;
+	uint32_t                        sm_block_size;
+	uint32_t                        sm_blocks_per_chunk;
+	uint32_t                        sm_chunks_per_cib;
+	uint32_t                        sm_cibs_per_cab;
+	spaceman_device_t               sm_dev[SD_COUNT];
+	uint32_t                        sm_flags;
+	uint32_t                        sm_ip_bm_tx_multiplier;
+	uint64_t                        sm_ip_block_count;
+	uint32_t                        sm_ip_bm_size_in_blocks;
+	uint32_t                        sm_ip_bm_block_count;
+	paddr_t                         sm_ip_bm_base;
+	paddr_t                         sm_ip_base;
+	uint64_t                        sm_fs_reserve_block_count;
+	uint64_t                        sm_fs_reserve_alloc_count;
+	spaceman_free_queue_t           sm_fq[SFQ_COUNT];
+	uint16_t                        sm_ip_bm_free_head;
+	uint16_t                        sm_ip_bm_free_tail;
+	uint32_t                        sm_ip_bm_xid_offset;
+	uint32_t                        sm_ip_bitmap_offset;
+	uint32_t                        sm_ip_bm_free_next_offset;
+	uint32_t                        sm_version;
+	uint32_t                        sm_struct_size;
+	spaceman_datazone_info_phys_t   sm_datazone;
+};

@@ -1,3 +1,21 @@
+/*
+	This file is part of fsdump, a tool for dumping drives into image files.
+	Copyright (C) 2020 Simon Gander.
+
+	FSDump is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	FSDump is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with fsdump.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include <cstdio>
 #include <cstring>
 #include <cinttypes>
@@ -6,6 +24,8 @@
 
 #include "Device.h"
 #include "GptPartitionMap.h"
+
+#define dbg_printf(...) // printf(__VA_ARGS__)
 
 static_assert(sizeof(GptPartitionMap::PMAP_GptHeader) == 96, "PMAP GPT-Header wrong size");
 static_assert(sizeof(GptPartitionMap::PMAP_Entry) == 128, "PMAP Entry wrong size");
@@ -177,11 +197,11 @@ int GptPartitionMap::CopyGPT(Device& src, Device& dst)
 	size_t pmap_size;
 	size_t size;
 
-	printf("Header size: %08X\n", le32toh(m_hdr->HeaderSize));
-	printf("Entry size: %08X\n", le32toh(m_hdr->SizeOfPartitionEntry));
-	printf("My LBA: %016" PRIX64 "\n", le64toh(m_hdr->MyLBA));
-	printf("Alt LBA: %016" PRIX64 "\n", le64toh(m_hdr->AlternateLBA));
-	printf("Pe LBA: %016" PRIX64 "\n", le64toh(m_hdr->PartitionEntryLBA));
+	dbg_printf("Header size: %08X\n", le32toh(m_hdr->HeaderSize));
+	dbg_printf("Entry size: %08X\n", le32toh(m_hdr->SizeOfPartitionEntry));
+	dbg_printf("My LBA: %016" PRIX64 "\n", le64toh(m_hdr->MyLBA));
+	dbg_printf("Alt LBA: %016" PRIX64 "\n", le64toh(m_hdr->AlternateLBA));
+	dbg_printf("Pe LBA: %016" PRIX64 "\n", le64toh(m_hdr->PartitionEntryLBA));
 
 	src.Read(buf, m_sector_size, 0);
 	dst.Write(buf, m_sector_size, 0);
@@ -191,14 +211,14 @@ int GptPartitionMap::CopyGPT(Device& src, Device& dst)
 	pmap_off = le64toh(m_hdr->PartitionEntryLBA) * m_sector_size;
 	pmap_size = le32toh(m_hdr->NumberOfPartitionEntries) * le32toh(m_hdr->SizeOfPartitionEntry);
 
-	printf("pmap_off = %" PRIX64 " pmap_size = %" PRIX64 "\n", pmap_off, pmap_size);
+	dbg_printf("pmap_off = %" PRIX64 " pmap_size = %" PRIX64 "\n", pmap_off, pmap_size);
 
 	while (pmap_size > 0) {
 		size = pmap_size;
 		if (size > 0x1000) size = 0x1000;
-		printf("read %p %zX %" PRIX64 "\n", buf, size, pmap_off);
+		dbg_printf("read %p %zX %" PRIX64 "\n", buf, size, pmap_off);
 		src.Read(buf, size, pmap_off);
-		printf("write same\n");
+		dbg_printf("write same\n");
 		dst.Write(buf, size, pmap_off);
 		pmap_off += size;
 		pmap_size -= size;
@@ -209,19 +229,19 @@ int GptPartitionMap::CopyGPT(Device& src, Device& dst)
 
 	const PMAP_GptHeader *alt_hdr = reinterpret_cast<const PMAP_GptHeader *>(buf);
 
-	printf("Pe LBA: %016" PRIX64 "\n", le64toh(alt_hdr->PartitionEntryLBA));
+	dbg_printf("Pe LBA: %016" PRIX64 "\n", le64toh(alt_hdr->PartitionEntryLBA));
 
 	pmap_off = le64toh(alt_hdr->PartitionEntryLBA) * m_sector_size;
 	pmap_size = le32toh(alt_hdr->NumberOfPartitionEntries) * le32toh(alt_hdr->SizeOfPartitionEntry);
 
-	printf("pmap_off = %" PRIX64 " pmap_size = %" PRIX64 "\n", pmap_off, pmap_size);
+	dbg_printf("pmap_off = %" PRIX64 " pmap_size = %" PRIX64 "\n", pmap_off, pmap_size);
 
 	while (pmap_size > 0) {
 		size = pmap_size;
 		if (size > 0x1000) size = 0x1000;
-		printf("read %p %zX %" PRIX64 "\n", buf, size, pmap_off);
+		dbg_printf("read %p %zX %" PRIX64 "\n", buf, size, pmap_off);
 		src.Read(buf, size, pmap_off);
-		printf("write same\n");
+		dbg_printf("write same\n");
 		dst.Write(buf, size, pmap_off);
 		pmap_off += size;
 		pmap_size -= size;

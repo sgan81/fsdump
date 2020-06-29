@@ -1,3 +1,20 @@
+/*
+	This file is part of fsdump, a tool for dumping drives into image files.
+	Copyright (C) 2020 Simon Gander.
+
+	FSDump is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	FSDump is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with fsdump.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #include <cassert>
 #include <cerrno>
@@ -70,11 +87,11 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 
 	m_drive_size = m_hdr.total_sectors * SECTOR_SIZE;
 	m_current_node_offset = 0;
-	m_file_size = 0x1000;
+	m_file_size = NODE_SIZE;
 	m_next_free_band = 0;
 	m_next_index_node_nr = 0;
 	m_band_size = BAND_SIZE;
-	m_band_size_shift = 20; // TODO: ILog2
+	m_band_size_shift = ilog2(m_band_size); // TODO: ILog2
 
 	m_band_offset.clear();
 	m_band_offset.resize((m_drive_size + m_band_size - 1) / m_band_size, 0);
@@ -107,7 +124,7 @@ int AppleSparseimage::Open(const char* name, bool writable)
 
 	m_drive_size = m_hdr.total_sectors * SECTOR_SIZE;
 	m_band_size = m_hdr.sectors_per_band * SECTOR_SIZE;
-	m_band_size_shift = 20; // TODO: ILog2
+	m_band_size_shift = ilog2(m_band_size); // TODO: ILog2
 
 	m_current_node_offset = 0;
 	m_file_size = 0;
@@ -166,6 +183,7 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	uint8_t *out_data = reinterpret_cast<uint8_t *>(data);
 	size_t read_size;
+	ssize_t nread;
 
 	if ((offset + size) > m_drive_size)
 		return EINVAL;
@@ -181,12 +199,13 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 		if (band_offset == 0) {
 			memset(out_data, 0, read_size);
 		} else {
-			pread(m_fd, out_data, read_size, band_offset + offset_in_band);
+			nread = pread64(m_fd, out_data, read_size, band_offset + offset_in_band);
+			if (nread < 0) return errno;
 		}
 
-		size -= read_size;
-		offset += read_size;
-		out_data += read_size;
+		size -= nread;
+		offset += nread;
+		out_data += nread;
 	}
 
 	return 0;
@@ -199,6 +218,7 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	const uint8_t *in_data = reinterpret_cast<const uint8_t *>(data);
 	size_t write_size;
+	ssize_t nwritten;
 
 	if ((offset + size) > m_drive_size)
 		return EINVAL;
@@ -216,11 +236,12 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 		band_offset = m_band_offset[band_id];
 		if (band_offset == 0)
 			band_offset = AllocBand(band_id);
-		pwrite(m_fd, in_data, write_size, band_offset + offset_in_band);
+		nwritten = pwrite64(m_fd, in_data, write_size, band_offset + offset_in_band);
+		if (nwritten < 0) return errno;
 
-		size -= write_size;
-		offset += write_size;
-		in_data += write_size;
+		size -= nwritten;
+		offset += nwritten;
+		in_data += nwritten;
 	}
 
 	return 0;
@@ -231,7 +252,7 @@ void AppleSparseimage::ReadHeader(AppleSparseimage::HeaderNode& hdr)
 	int k;
 	HeaderNode hdr_be;
 
-	pread(m_fd, &hdr_be, NODE_SIZE, 0);
+	pread64(m_fd, &hdr_be, NODE_SIZE, 0);
 
 	hdr.signature = be32toh(hdr_be.signature);
 	hdr.version = be32toh(hdr_be.version);
@@ -263,7 +284,7 @@ void AppleSparseimage::WriteHeader(const AppleSparseimage::HeaderNode& hdr)
 	for (k = 0; k < 0x3F0; k++)
 		hdr_be.band_id[k] = htobe32(hdr.band_id[k]);
 
-	pwrite(m_fd, &hdr_be, NODE_SIZE, 0);
+	pwrite64(m_fd, &hdr_be, NODE_SIZE, 0);
 }
 
 void AppleSparseimage::ReadIndex(AppleSparseimage::IndexNode& idx, uint64_t offset)
@@ -271,7 +292,7 @@ void AppleSparseimage::ReadIndex(AppleSparseimage::IndexNode& idx, uint64_t offs
 	int k;
 	IndexNode idx_be;
 
-	pread(m_fd, &idx_be, NODE_SIZE, offset);
+	pread64(m_fd, &idx_be, NODE_SIZE, offset);
 
 	idx.signature = be32toh(idx_be.signature);
 	idx.index_node_nr = be32toh(idx_be.index_node_nr);
@@ -297,7 +318,7 @@ void AppleSparseimage::WriteIndex(const AppleSparseimage::IndexNode& idx, uint64
 	for (k = 0; k < 0x3F2; k++)
 		idx_be.band_id[k] = htobe32(idx.band_id[k]);
 
-	pwrite(m_fd, &idx_be, NODE_SIZE, offset);
+	pwrite64(m_fd, &idx_be, NODE_SIZE, offset);
 }
 
 uint64_t AppleSparseimage::AllocBand(size_t band_id)
