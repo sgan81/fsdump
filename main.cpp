@@ -19,6 +19,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cinttypes>
+#include <cerrno>
 
 #include "AppleSparseimage.h"
 #include "DeviceLinux.h"
@@ -59,13 +60,30 @@ int main(int argc, char *argv[])
 	int err;
 	GptPartitionMap::PMAP_Entry pe;
 
-	if (!bdev.Open("/dev/sdd"))
-		return -1;
+	if (argc < 3) {
+		printf("Syntax: fsdump <srcdevice> <dstfile>\n");
+		printf("srcdevice: Block device (whole disk, for example /dev/sda\n");
+		printf("dstfile: Image file to be written, for example image.sparseimage\n");
+		return EINVAL;
+	}
 
-	pmap.LoadAndVerify(bdev);
+	if (!bdev.Open(argv[1]))
+	{
+		fprintf(stderr, "Unable to open device %s\n", argv[1]);
+		return ENOENT;
+	}
+
+	if (!pmap.LoadAndVerify(bdev)) {
+		fprintf(stderr, "Partition table invalid.\n");
+		return EINVAL;
+	}
 	pmap.ListEntries();
 
-	sprs.Create("test.sparseimage", bdev.GetSize());
+	err = sprs.Create(argv[2], bdev.GetSize());
+	if (err) {
+		perror("Error creating image file: ");
+		return err;
+	}
 
 	printf("Copying GPT\n");
 	pmap.CopyGPT(bdev, sprs);
