@@ -25,6 +25,31 @@
 #include "DeviceLinux.h"
 #include "GptPartitionMap.h"
 #include "Apfs.h"
+#include "Ntfs.h"
+
+void DumpHex(const void *vdata, uint32_t size)
+{
+	const uint8_t *data = reinterpret_cast<const uint8_t *>(vdata);
+	uint32_t y;
+	uint32_t x;
+	constexpr uint32_t linesize = 32;
+
+	for (y = 0; y < size; y += linesize) {
+		printf("%08X: ", y);
+		for (x = 0; x < linesize && (x + y) < size; x++)
+			printf("%02X ", data[y + x]);
+		for (; x < linesize; x++)
+			printf("   ");
+		printf(": ");
+		for (x = 0; x < linesize && (x + y) < size; x++) {
+			if (data[y + x] >= 0x20 && data[y + x] < 0x7F)
+				printf("%c", data[y + x]);
+			else
+				printf(".");
+		}
+		printf("\n");
+	}
+}
 
 int CopyRaw(Device &src, Device &dst, uint64_t start_off, uint64_t end_off)
 {
@@ -59,6 +84,7 @@ int main(int argc, char *argv[])
 	int pt;
 	int err;
 	GptPartitionMap::PMAP_Entry pe;
+	uint8_t test[0x1000];
 
 	if (argc < 3) {
 		printf("Syntax: fsdump <srcdevice> <dstfile>\n");
@@ -96,16 +122,25 @@ int main(int argc, char *argv[])
 		end = (pe.EndingLBA + 1) * bdev.GetSectorSize();
 
 		printf("Copying partition %d: %" PRIX64 " - %" PRIX64 " ", pt, pe.StartingLBA, pe.EndingLBA);
-		if (!memcmp(pe.PartitionTypeGUID, GptPartitionMap::PTYPE_EFI_SYS, sizeof(GptPartitionMap::PM_GUID))) {
-			printf("[EFI SYSTEM]\n");
-			CopyRaw(bdev, sprs, start, end);
-		} else if (!memcmp(pe.PartitionTypeGUID, GptPartitionMap::PTYPE_APFS, sizeof(GptPartitionMap::PM_GUID))) {
+		bdev.Read(test, bdev.GetSectorSize(), start);
+		if (!memcmp(test + 32, "NXSB", 4)) {
 			printf("[APFS]\n");
 			Apfs apfs(bdev, start);
 			err = apfs.CopyData(sprs);
 			if (err) perror("APFS err: ");
+		} else if (!memcmp(test + 3, "MSDOS5.0", 8)) {
+			printf("[FAT]\n");
+			// CopyRaw(bdev, sprs, start, end);
+		} else if (!memcmp(test + 3, "NTFS    ", 8)) {
+			printf("[NTFS, skipping]\n");
+			Ntfs ntfs(bdev, start);
+			err = ntfs.CopyData(sprs);
 		} else {
-			printf("[Unknown, skipping]\n");
+			printf("[UNKNOWN, skipping]\n");
+		}
+
+		if (true) {
+			DumpHex(test, bdev.GetSectorSize());
 		}
 
 		pt++;

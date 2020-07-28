@@ -38,7 +38,7 @@ static void PrintGUID(const GptPartitionMap::PM_GUID &guid)
 	printf("%02X%02X%02X%02X-", guid[3], guid[2], guid[1], guid[0]);
 	printf("%02X%02X-", guid[5], guid[4]);
 	printf("%02X%02X-", guid[7], guid[6]);
-	printf("%02X%02X-", guid[9], guid[8]);
+	printf("%02X%02X-", guid[8], guid[9]);
 	printf("%02X%02X%02X%02X%02X%02X", guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
 }
 
