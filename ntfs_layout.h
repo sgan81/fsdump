@@ -20,6 +20,10 @@
 
 #include <cstdint>
 
+constexpr auto MASTER_FILE_TABLE_NUMBER = 0;
+constexpr auto MASTER_FILE_TABLE2_NUMBER = 1;
+constexpr auto BIT_MAP_FILE_NUMBER = 6;
+
 struct MULTI_SECTOR_HEADER {
 	uint32_t Magic;
 	uint16_t UsaOff;

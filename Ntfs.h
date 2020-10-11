@@ -44,6 +44,7 @@ public:
 
 private:
 	int ReadBlock(uint64_t lcn, void *data, size_t size = 0x1000);
+	int WriteBlock(Device &dev, uint64_t lcn, const void *data, size_t size = 0x1000);
 	int ReadData(uint64_t pos, void *data, size_t size);
 	static bool FixUpdSeqRecord(uint8_t *out, const uint8_t *in, size_t size = 0x400);
 

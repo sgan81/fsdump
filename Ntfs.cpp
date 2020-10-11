@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cinttypes>
+#include <cassert>
 #include <endian.h>
 
 #include "Ntfs.h"
@@ -145,7 +146,7 @@ bool NtfsFile::Open(const uint8_t* mft_rec)
 
 			lcn += dl;
 
-			m_exts.push_back(Extent(dv, lcn));
+			m_exts.push_back(Extent(lcn, dv));
 		}
 	}
 
@@ -165,6 +166,31 @@ uint64_t NtfsFile::GetSize()
 
 void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 {
+	uint8_t *bdata = reinterpret_cast<uint8_t *>(data);
+
+	uint64_t ext_off = 0;
+	uint64_t ext_size;
+	uint64_t rd_offs;
+	uint64_t rd_size;
+	size_t n;
+
+	if ((offset + size) > m_size)
+		return /* EINVAL */;
+
+	for (n = 0; n < m_exts.size() && size != 0; n++) {
+		ext_size = m_exts[n].count * m_fs.m_blksize;
+		if (ext_off <= offset && (ext_off + ext_size) > offset) {
+			rd_size = size;
+			rd_offs = offset - ext_off;
+			if ((offset + rd_size) > (ext_off + ext_size))
+				rd_size = ext_off + ext_size - offset;
+			m_fs.m_srcdev.Read(bdata, rd_size, m_exts[n].start * m_fs.m_blksize + rd_offs + m_fs.m_offset);
+			bdata += rd_size;
+			size -= rd_size;
+			offset += rd_size;
+		}
+		ext_off += m_exts[n].count * m_fs.m_blksize;
+	}
 	// m_fs.m_srcdev.Read(m_fs.m_offset + ...);
 }
 
@@ -186,15 +212,22 @@ int Ntfs::CopyData(Device& dst)
 	BOOT_SECTOR boot;
 
 	m_srcdev.Read(&boot, sizeof(boot), m_offset);
+#ifdef DEBUG_VERBOSE
+	printf("Boot:\n");
+	DumpHex(&boot, sizeof(boot));
+#endif
 
 	m_blksize = boot.Bpb.BytesPerSector * boot.Bpb.SectorsPerCluster;
 
+#ifdef DEBUG_VERBOSE
 	printf("BytesPerSector: %04X\n", boot.Bpb.BytesPerSector);
 	printf("SecsPerCluster: %02X\n", boot.Bpb.SectorsPerCluster);
 	printf("NumberSectors:  %" PRIX64 "\n", boot.NumberSectors);
 	printf("MftStartLcn:    %" PRIX64 "\n", boot.MftStartLcn);
 	printf("Mft2StartLcn:   %" PRIX64 "\n", boot.Mft2StartLcn);
+#endif
 
+#if 0
 	for (int n = 0; n < 0x40; n++) {
 		ReadBlock(boot.MftStartLcn + n, m_blk);
 #if 0
@@ -207,10 +240,50 @@ int Ntfs::CopyData(Device& dst)
 		DumpMFTEntry(m_blk + 0x800, (n << 2) + 2);
 		DumpMFTEntry(m_blk + 0xC00, (n << 2) + 3);
 	}
+#endif
 
-	(void)dst;
+	NtfsFile mft(*this);
+	NtfsFile bitmap(*this);
+	uint8_t frec[0x400];
+	std::vector<uint8_t> bmpdata;
+	size_t n;
+	int b;
 
-	return ENOTSUP;
+	ReadBlock(boot.MftStartLcn, m_blk);
+	FixUpdSeqRecord(m_blk, m_blk);
+
+	mft.Open(m_blk);
+	mft.Read(frec, 0x400, 0x400 * BIT_MAP_FILE_NUMBER);
+	mft.Close();
+
+	FixUpdSeqRecord(frec, frec);
+
+	bitmap.Open(frec);
+	bmpdata.resize(bitmap.GetSize());
+	bitmap.Read(bmpdata.data(), bmpdata.size(), 0);
+	bitmap.Close();
+
+	for (n = 0; n < bmpdata.size(); n++) {
+		for (b = 0; b < 8; b++) {
+			if (bmpdata[n] & (1 << b)) {
+				ReadBlock(8 * n + b, m_blk);
+				WriteBlock(dst, 8 * n + b, m_blk);
+			}
+		}
+	}
+
+#if 0
+	FILE *bmptest;
+	char name[64];
+	sprintf(name, "bitmap-%lX.dat", m_offset);
+	bmptest = fopen(name, "wb");
+	if (bmptest) {
+		fwrite(bmpdata.data(), 1, bmpdata.size(), bmptest);
+		fclose(bmptest);
+	}
+#endif
+
+	return 0;
 }
 
 int Ntfs::ReadBlock(uint64_t lcn, void* data, size_t size)
@@ -218,6 +291,13 @@ int Ntfs::ReadBlock(uint64_t lcn, void* data, size_t size)
 	uint64_t off = (lcn * m_blksize) + m_offset;
 
 	return m_srcdev.Read(data, size, off);
+}
+
+int Ntfs::WriteBlock(Device &dev, uint64_t lcn, const void *data, size_t size)
+{
+	uint64_t off = (lcn * m_blksize) + m_offset;
+
+	return dev.Write(data, size, off);
 }
 
 int Ntfs::ReadData(uint64_t pos, void* data, size_t size)
@@ -234,7 +314,12 @@ bool Ntfs::FixUpdSeqRecord(uint8_t* out, const uint8_t* in, size_t size)
 
 	memcpy(out, in, size);
 	const FILE_RECORD_SEGMENT_HEADER *frsh = reinterpret_cast<const FILE_RECORD_SEGMENT_HEADER *>(out);
-	if (frsh->MultiSectorHeader.Magic != 0x454C4946) return false;
+	// assert(frsh->MultiSectorHeader.Magic == 0x454C4946);
+	if (frsh->MultiSectorHeader.Magic != 0x454C4946) {
+		printf("USA fixup failed.\n");
+		DumpHex(in, size);
+		return false;
+	}
 	usa = reinterpret_cast<const uint16_t *>(out + frsh->MultiSectorHeader.UsaOff);
 	rec_u16 = reinterpret_cast<uint16_t *>(out);
 	ok = true;

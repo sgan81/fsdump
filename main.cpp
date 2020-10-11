@@ -130,18 +130,20 @@ int main(int argc, char *argv[])
 			if (err) perror("APFS err: ");
 		} else if (!memcmp(test + 3, "MSDOS5.0", 8)) {
 			printf("[FAT]\n");
-			// CopyRaw(bdev, sprs, start, end);
+			CopyRaw(bdev, sprs, start, end);
 		} else if (!memcmp(test + 3, "NTFS    ", 8)) {
-			printf("[NTFS, skipping]\n");
+			printf("[NTFS]\n");
 			Ntfs ntfs(bdev, start);
 			err = ntfs.CopyData(sprs);
 		} else {
 			printf("[UNKNOWN, skipping]\n");
 		}
 
+#if 0
 		if (true) {
 			DumpHex(test, bdev.GetSectorSize());
 		}
+#endif
 
 		pt++;
 	}
