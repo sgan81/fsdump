@@ -184,7 +184,7 @@ void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 			rd_offs = offset - ext_off;
 			if ((offset + rd_size) > (ext_off + ext_size))
 				rd_size = ext_off + ext_size - offset;
-			m_fs.m_srcdev.Read(bdata, rd_size, m_exts[n].start * m_fs.m_blksize + rd_offs + m_fs.m_offset);
+			m_fs.m_srcdev.Read(bdata, rd_size, m_exts[n].start * m_fs.m_blksize + rd_offs);
 			bdata += rd_size;
 			size -= rd_size;
 			offset += rd_size;
@@ -194,7 +194,7 @@ void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 	// m_fs.m_srcdev.Read(m_fs.m_offset + ...);
 }
 
-Ntfs::Ntfs(Device& src, uint64_t offset) : m_srcdev(src), m_offset(offset)
+Ntfs::Ntfs(Device& src) : m_srcdev(src)
 {
 }
 
@@ -211,7 +211,7 @@ int Ntfs::CopyData(Device& dst)
 {
 	BOOT_SECTOR boot;
 
-	m_srcdev.Read(&boot, sizeof(boot), m_offset);
+	m_srcdev.Read(&boot, sizeof(boot), 0);
 #ifdef DEBUG_VERBOSE
 	printf("Boot:\n");
 	DumpHex(&boot, sizeof(boot));
@@ -288,21 +288,21 @@ int Ntfs::CopyData(Device& dst)
 
 int Ntfs::ReadBlock(uint64_t lcn, void* data, size_t size)
 {
-	uint64_t off = (lcn * m_blksize) + m_offset;
+	uint64_t off = (lcn * m_blksize);
 
 	return m_srcdev.Read(data, size, off);
 }
 
 int Ntfs::WriteBlock(Device &dev, uint64_t lcn, const void *data, size_t size)
 {
-	uint64_t off = (lcn * m_blksize) + m_offset;
+	uint64_t off = (lcn * m_blksize);
 
 	return dev.Write(data, size, off);
 }
 
 int Ntfs::ReadData(uint64_t pos, void* data, size_t size)
 {
-	return m_srcdev.Read(data, size, pos + m_offset);
+	return m_srcdev.Read(data, size, pos);
 }
 
 bool Ntfs::FixUpdSeqRecord(uint8_t* out, const uint8_t* in, size_t size)

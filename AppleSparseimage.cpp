@@ -96,6 +96,8 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 	m_band_offset.clear();
 	m_band_offset.resize((m_drive_size + m_band_size - 1) / m_band_size, 0);
 
+	SetPartitionLimits(0, m_drive_size);
+
 	return 0;
 }
 
@@ -160,6 +162,8 @@ int AppleSparseimage::Open(const char* name, bool writable)
 
 	m_file_size = offset;
 
+	SetPartitionLimits(0, m_drive_size);
+
 	return 0;
 }
 
@@ -184,6 +188,8 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 	uint8_t *out_data = reinterpret_cast<uint8_t *>(data);
 	size_t read_size;
 	ssize_t nread;
+
+	offset += GetPartitionStart();
 
 	if ((offset + size) > m_drive_size)
 		return EINVAL;
@@ -219,6 +225,8 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 	const uint8_t *in_data = reinterpret_cast<const uint8_t *>(data);
 	size_t write_size;
 	ssize_t nwritten;
+
+	offset += GetPartitionStart();
 
 	if ((offset + size) > m_drive_size)
 		return EINVAL;

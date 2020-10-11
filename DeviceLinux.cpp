@@ -62,6 +62,8 @@ bool DeviceLinux::Open(const char* name)
 		fprintf(stderr, "I don't know what to do with this kind of file ...\n");
 	}
 
+	SetPartitionLimits(0, m_size);
+
 	return m_device >= 0;
 }
 
@@ -77,6 +79,8 @@ int DeviceLinux::Read(void* data, size_t size, uint64_t offset)
 {
 	ssize_t nread;
 	uint8_t *pdata = reinterpret_cast<uint8_t *>(data);
+
+	offset += GetPartitionStart();
 
 	while (size > 0) {
 		nread = pread64(m_device, pdata, size, offset);

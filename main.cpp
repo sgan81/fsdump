@@ -121,23 +121,30 @@ int main(int argc, char *argv[])
 		start = pe.StartingLBA * bdev.GetSectorSize();
 		end = (pe.EndingLBA + 1) * bdev.GetSectorSize();
 
+		bdev.SetPartitionLimits(start, end - start);
+		sprs.SetPartitionLimits(start, end - start);
+
 		printf("Copying partition %d: %" PRIX64 " - %" PRIX64 " ", pt, pe.StartingLBA, pe.EndingLBA);
-		bdev.Read(test, bdev.GetSectorSize(), start);
+		bdev.Read(test, bdev.GetSectorSize(), 0);
 		if (!memcmp(test + 32, "NXSB", 4)) {
 			printf("[APFS]\n");
-			Apfs apfs(bdev, start);
+			Apfs apfs(bdev);
 			err = apfs.CopyData(sprs);
 			if (err) perror("APFS err: ");
 		} else if (!memcmp(test + 3, "MSDOS5.0", 8)) {
 			printf("[FAT]\n");
-			CopyRaw(bdev, sprs, start, end);
+			// CopyRaw(bdev, sprs, start, end);
+			CopyRaw(bdev, sprs, 0, end - start);
 		} else if (!memcmp(test + 3, "NTFS    ", 8)) {
 			printf("[NTFS]\n");
-			Ntfs ntfs(bdev, start);
+			Ntfs ntfs(bdev);
 			err = ntfs.CopyData(sprs);
 		} else {
 			printf("[UNKNOWN, skipping]\n");
 		}
+
+		bdev.ResetPartitionLimits();
+		sprs.ResetPartitionLimits();
 
 #if 0
 		if (true) {
@@ -146,6 +153,8 @@ int main(int argc, char *argv[])
 #endif
 
 		pt++;
+
+		// if (pt == 3) break; // Test
 	}
 
 	sprs.Close();

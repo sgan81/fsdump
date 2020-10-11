@@ -25,7 +25,7 @@
 class Apfs : public FileSystem
 {
 public:
-	Apfs(Device &src, uint64_t offset);
+	Apfs(Device &src);
 	~Apfs();
 
 	uint64_t GetOccupiedSize() const override;
@@ -45,6 +45,5 @@ private:
 	static uint64_t Fletcher64(const uint32_t *data, size_t cnt, uint64_t init);
 
 	Device &m_srcdev;
-	const uint64_t m_offset;
 	uint8_t *m_buf;
 };

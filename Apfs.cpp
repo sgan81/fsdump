@@ -30,7 +30,7 @@
 
 static constexpr size_t BUF_SIZE = 0x400000;
 
-Apfs::Apfs(Device &src, uint64_t offset) : m_srcdev(src), m_offset(offset)
+Apfs::Apfs(Device &src) : m_srcdev(src)
 {
 	m_buf = new uint8_t[BUF_SIZE];
 }
@@ -226,7 +226,7 @@ int Apfs::CopyCIB(Device& dst, uint64_t cib_paddr)
 
 int Apfs::ReadBlock(uint64_t paddr, void* data, size_t size)
 {
-	uint64_t off = (paddr << 12) + m_offset; // TODO: Blocksize
+	uint64_t off = paddr << 12; // TODO: Blocksize
 
 	return m_srcdev.Read(data, size, off);
 }
@@ -246,7 +246,7 @@ int Apfs::ReadVerifiedBlock(uint64_t paddr, void* data, size_t size)
 
 int Apfs::WriteBlock(Device& dev, uint64_t paddr, void* data, size_t size)
 {
-	uint64_t off = (paddr << 12) + m_offset;
+	uint64_t off = paddr << 12;
 
 	return dev.Write(data, size, off);
 }
@@ -259,7 +259,7 @@ int Apfs::CopyRange(Device& dst, uint64_t paddr, uint64_t blocks)
 
 	dbg_printf("CopyRange %" PRIX64 " L %" PRIX64 "\n", paddr, blocks);
 
-	off = (paddr << 12) + m_offset;
+	off = paddr << 12;
 	size = blocks << 12;
 
 	while (size > 0) {

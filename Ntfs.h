@@ -36,7 +36,7 @@ class Ntfs : public FileSystem
 {
 	friend class NtfsFile;
 public:
-	Ntfs(Device &src, uint64_t offset);
+	Ntfs(Device &src);
 	~Ntfs();
 
 	uint64_t GetOccupiedSize() const override;
@@ -51,7 +51,6 @@ private:
 	static void DumpMFTEntry(const uint8_t *entry, uint64_t idx);
 
 	Device &m_srcdev;
-	const uint64_t m_offset;
 	uint32_t m_blksize;
 	uint8_t m_blk[0x1000];
 };

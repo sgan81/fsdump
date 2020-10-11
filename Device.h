@@ -23,7 +23,12 @@
 class Device
 {
 protected:
-	Device() { m_sector_size = 0x200; }
+	Device()
+	{
+		m_sector_size = 0x200;
+		m_part_start = 0;
+		m_part_size = 0;
+	}
 
 public:
 	virtual ~Device() {}
@@ -35,6 +40,32 @@ public:
 	unsigned int GetSectorSize() const { return m_sector_size; }
 	void SetSectorSize(unsigned int size) { m_sector_size = size; }
 
+	void SetPartitionLimits(uint64_t start, uint64_t size)
+	{
+		m_part_start = start;
+		m_part_size = size;
+	}
+
+	void GetPartitionLimits(uint64_t &start, uint64_t &size) const
+	{
+		start = m_part_start;
+		size = m_part_size;
+	}
+
+	void ResetPartitionLimits()
+	{
+		m_part_start = 0;
+		m_part_size = GetSize();
+	}
+
+protected:
+	uint64_t GetPartitionStart() const
+	{
+		return m_part_start;
+	}
+
 private:
 	unsigned int m_sector_size;
+	uint64_t m_part_start;
+	uint64_t m_part_size;
 };
