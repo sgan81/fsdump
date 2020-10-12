@@ -58,10 +58,14 @@ public:
 		m_part_size = GetSize();
 	}
 
-protected:
 	uint64_t GetPartitionStart() const
 	{
 		return m_part_start;
+	}
+
+	uint64_t GetPartitionSize() const
+	{
+		return m_part_size;
 	}
 
 private:

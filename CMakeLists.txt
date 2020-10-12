@@ -18,6 +18,7 @@ FileSystem.h
 GptPartitionMap.cpp
 GptPartitionMap.h
 main.cpp
+MasterBootRecord.h
 Ntfs.cpp
 Ntfs.h
 ntfs_layout.h

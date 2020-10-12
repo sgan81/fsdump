@@ -24,6 +24,7 @@
 #include "AppleSparseimage.h"
 #include "DeviceLinux.h"
 #include "GptPartitionMap.h"
+#include "MasterBootRecord.h"
 #include "Apfs.h"
 #include "Ntfs.h"
 
@@ -51,27 +52,58 @@ void DumpHex(const void *vdata, uint32_t size)
 	}
 }
 
-int CopyRaw(Device &src, Device &dst, uint64_t start_off, uint64_t end_off)
+int CopyRaw(Device &src, Device &dst)
 {
 	uint8_t buf[0x1000];
 	uint64_t off;
-	size_t size;
+	const size_t size = src.GetPartitionSize();
+	size_t bsize;
 	int err;
 
-	off = start_off;
+	off = 0;
 
-	while (off < end_off) {
-		size = ((end_off - off) > 0x1000) ? 0x1000 : end_off - off;
+	while (off < size) {
+		bsize = 0x1000;
+		if ((size - off) < 0x1000)
+			bsize = size - off;
 
-		err = src.Read(buf, size, off);
+		err = src.Read(buf, bsize, off);
 		if (err) return err;
-		err = dst.Write(buf, size, off);
+		err = dst.Write(buf, bsize, off);
 		if (err) return err;
 
-		off += size;
+		off += bsize;
 	}
 
 	return 0;
+}
+
+int CopyPartition(Device &src, Device &dst)
+{
+	int err;
+	uint8_t test[0x1000];
+
+	src.Read(test, src.GetSectorSize(), 0);
+	DumpHex(test, 0x200);
+
+	if (!memcmp(test + 32, "NXSB", 4)) {
+		printf("[APFS]\n");
+		Apfs apfs(src);
+		err = apfs.CopyData(dst);
+		if (err) perror("APFS err: ");
+	} else if (!memcmp(test + 3, "MSDOS5.0", 8) || !memcmp(test + 3, "BSD  4.4", 8)) {
+		printf("[FAT]\n");
+		// CopyRaw(bdev, sprs, start, end);
+		err = CopyRaw(src, dst);
+	} else if (!memcmp(test + 3, "NTFS    ", 8)) {
+		printf("[NTFS]\n");
+		Ntfs ntfs(src);
+		err = ntfs.CopyData(dst);
+	} else {
+		printf("[UNKNOWN, skipping]\n");
+		err = 0;
+	}
+	return err;
 }
 
 int main(int argc, char *argv[])
@@ -81,10 +113,10 @@ int main(int argc, char *argv[])
 	GptPartitionMap pmap;
 	uint64_t start;
 	uint64_t end;
+	uint64_t size;
 	int pt;
 	int err;
 	GptPartitionMap::PMAP_Entry pe;
-	uint8_t test[0x1000];
 
 	if (argc < 3) {
 		printf("Syntax: fsdump <srcdevice> <dstfile>\n");
@@ -99,62 +131,66 @@ int main(int argc, char *argv[])
 		return ENOENT;
 	}
 
-	if (!pmap.LoadAndVerify(bdev)) {
-		fprintf(stderr, "Partition table invalid.\n");
-		return EINVAL;
-	}
-	pmap.ListEntries();
-
 	err = sprs.Create(argv[2], bdev.GetSize());
 	if (err) {
 		perror("Error creating image file: ");
 		return err;
 	}
 
-	printf("Copying GPT\n");
-	pmap.CopyGPT(bdev, sprs);
+	if (pmap.LoadAndVerify(bdev)) {
+		fprintf(stderr, "Found GPT partition table.\n");
+		pmap.ListEntries();
 
-	pt = 0;
-	for (;;) {
-		pmap.GetPartitionEntry(pt, pe);
-		if (pe.StartingLBA == 0 || pe.EndingLBA == 0) break;
-		start = pe.StartingLBA * bdev.GetSectorSize();
-		end = (pe.EndingLBA + 1) * bdev.GetSectorSize();
+		printf("Copying GPT\n");
+		pmap.CopyGPT(bdev, sprs);
 
-		bdev.SetPartitionLimits(start, end - start);
-		sprs.SetPartitionLimits(start, end - start);
+		pt = 0;
+		for (;;) {
+			pmap.GetPartitionEntry(pt, pe);
+			if (pe.StartingLBA == 0 || pe.EndingLBA == 0) break;
+			start = pe.StartingLBA * bdev.GetSectorSize();
+			end = (pe.EndingLBA + 1) * bdev.GetSectorSize();
 
-		printf("Copying partition %d: %" PRIX64 " - %" PRIX64 " ", pt, pe.StartingLBA, pe.EndingLBA);
-		bdev.Read(test, bdev.GetSectorSize(), 0);
-		if (!memcmp(test + 32, "NXSB", 4)) {
-			printf("[APFS]\n");
-			Apfs apfs(bdev);
-			err = apfs.CopyData(sprs);
-			if (err) perror("APFS err: ");
-		} else if (!memcmp(test + 3, "MSDOS5.0", 8)) {
-			printf("[FAT]\n");
-			// CopyRaw(bdev, sprs, start, end);
-			CopyRaw(bdev, sprs, 0, end - start);
-		} else if (!memcmp(test + 3, "NTFS    ", 8)) {
-			printf("[NTFS]\n");
-			Ntfs ntfs(bdev);
-			err = ntfs.CopyData(sprs);
+			bdev.SetPartitionLimits(start, end - start);
+			sprs.SetPartitionLimits(start, end - start);
+
+			printf("Copying partition %d: %" PRIX64 " - %" PRIX64 " ", pt, pe.StartingLBA, pe.EndingLBA);
+			CopyPartition(bdev, sprs);
+
+			bdev.ResetPartitionLimits();
+			sprs.ResetPartitionLimits();
+
+			pt++;
+
+			if (pt == 3) break; // Test
+		}
+	} else {
+		MasterBootRecord mbr;
+
+		bdev.Read(&mbr, sizeof(mbr), 0);
+		if (mbr.signature[0] == 0x55 && mbr.signature[1] == 0xAA) {
+			printf("MBR partition table detected.\n");
+
+			sprs.Write(&mbr, sizeof(mbr), 0);
+
+			for (pt = 0; pt < 4; pt++) {
+				printf("Partition %d: %u - %u ... ", pt, mbr.partition[pt].lba_start, mbr.partition[pt].lba_size);
+				start = static_cast<uint64_t>(mbr.partition[pt].lba_start) * bdev.GetSectorSize();
+				size = static_cast<uint64_t>(mbr.partition[pt].lba_size) * bdev.GetSectorSize();
+				if (size > 0) {
+					bdev.SetPartitionLimits(start, size);
+					sprs.SetPartitionLimits(start, size);
+					CopyPartition(bdev, sprs);
+					bdev.ResetPartitionLimits();
+					sprs.ResetPartitionLimits();
+				} else {
+					printf("\n");
+				}
+			}
 		} else {
-			printf("[UNKNOWN, skipping]\n");
+			printf("No supported partition table found, trying raw copy ... ");
+			CopyPartition(bdev, sprs);
 		}
-
-		bdev.ResetPartitionLimits();
-		sprs.ResetPartitionLimits();
-
-#if 0
-		if (true) {
-			DumpHex(test, bdev.GetSectorSize());
-		}
-#endif
-
-		pt++;
-
-		// if (pt == 3) break; // Test
 	}
 
 	sprs.Close();
