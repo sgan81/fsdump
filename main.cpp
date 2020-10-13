@@ -23,6 +23,7 @@
 
 #include "AppleSparseimage.h"
 #include "DeviceLinux.h"
+#include "DeviceWindows.h"
 #include "GptPartitionMap.h"
 #include "MasterBootRecord.h"
 #include "Apfs.h"
@@ -109,7 +110,11 @@ int CopyPartition(Device &src, Device &dst)
 int main(int argc, char *argv[])
 {
 	AppleSparseimage sprs;
+#ifdef WIN32
+	DeviceWindows bdev;
+#else
 	DeviceLinux bdev;
+#endif
 	GptPartitionMap pmap;
 	uint64_t start;
 	uint64_t end;

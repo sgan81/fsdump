@@ -22,4 +22,6 @@ MasterBootRecord.h
 Ntfs.cpp
 Ntfs.h
 ntfs_layout.h
+Vhdx.cpp
+Vhdx.h
 )

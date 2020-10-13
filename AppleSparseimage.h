@@ -22,11 +22,18 @@
 #include <cstdint>
 
 #include <vector>
+#include <fstream>
 
 #include "Device.h"
 
 class AppleSparseimage : public Device
 {
+#ifdef _MSC_VER
+#define __attribute__(x)
+#pragma pack(push)
+#pragma pack(4)
+#endif
+
 	struct HeaderNode {
 		uint32_t signature;
 		uint32_t version;
@@ -47,6 +54,11 @@ class AppleSparseimage : public Device
 		uint8_t pad[0x24];
 		uint32_t band_id[0x3F2];
 	} __attribute__((packed, aligned(4)));
+
+#ifdef _MSC_VER
+#undef __attribute__
+#pragma pack(pop)
+#endif
 
 public:
 	AppleSparseimage();
@@ -76,7 +88,7 @@ private:
 	uint32_t m_next_index_node_nr;
 	uint32_t m_band_size;
 	int m_band_size_shift;
-	int m_fd;
+	std::fstream m_st;
 	bool m_writable;
 
 	HeaderNode m_hdr;

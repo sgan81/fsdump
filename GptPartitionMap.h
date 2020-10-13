@@ -33,6 +33,12 @@ class GptPartitionMap
 public:
 	typedef uint8_t PM_GUID[0x10];
 
+#ifdef _MSC_VER
+#define __attribute__(x)
+#pragma pack(push)
+#pragma pack(8)
+#endif
+
 	struct PMAP_GptHeader
 	{
 		uint64_t Signature;
@@ -61,6 +67,11 @@ public:
 		uint64_t Attributes;
 		uint16_t PartitionName[36];
 	};
+
+#ifdef _MSC_VER
+#undef __attribute__
+#pragma pack(pop)
+#endif
 
 	GptPartitionMap();
 

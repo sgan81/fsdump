@@ -96,7 +96,7 @@ bool GptPartitionMap::LoadAndVerify(Device & dev)
 	size_t mapsize;
 
 	mapsize = le32toh(hdr->NumberOfPartitionEntries) * le32toh(hdr->SizeOfPartitionEntry);
-	mapsize = (mapsize + m_sector_size - 1) & ~(m_sector_size - 1);
+	mapsize = (mapsize + m_sector_size - 1) & ~static_cast<size_t>(m_sector_size - 1);
 
 	m_entry_data.resize(mapsize);
 	dev.Read(m_entry_data.data(), m_entry_data.size(), m_sector_size * le64toh(hdr->PartitionEntryLBA));

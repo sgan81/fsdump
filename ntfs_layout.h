@@ -20,6 +20,12 @@
 
 #include <cstdint>
 
+#ifdef _MSC_VER
+#define __attribute__(x)
+#pragma pack(push)
+#pragma pack(1)
+#endif
+
 constexpr auto MASTER_FILE_TABLE_NUMBER = 0;
 constexpr auto MASTER_FILE_TABLE2_NUMBER = 1;
 constexpr auto BIT_MAP_FILE_NUMBER = 6;
@@ -174,3 +180,8 @@ struct INDEX_ENTRY {
 	uint16_t Flags;
 	uint16_t Reserved;
 };
+
+#ifdef _MSC_VER
+#pragma pack(pop)
+#undef __attribute__
+#endif
