@@ -54,6 +54,7 @@ AppleSparseimage::AppleSparseimage()
 	m_next_index_node_nr = 0;
 	m_band_size = 0;
 	m_band_size_shift = 0;
+	m_file = nullptr;
 	m_writable = false;
 }
 
@@ -68,8 +69,13 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 
 	m_writable = true;
 
-	m_st.open(name, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
-	if (!m_st.is_open())
+#ifdef _MSC_VER
+	fopen_s(&m_file, name, "w+b");
+#else
+	m_file = fopen(name, "w+b");
+#endif
+
+	if (m_file == nullptr)
 		return errno;
 
 	m_hdr.signature = SPRS_SIGNATURE;
@@ -103,16 +109,22 @@ int AppleSparseimage::Open(const char* name, bool writable)
 	size_t n;
 	uint64_t offset;
 	uint64_t node_offset;
+	const char* mode;
 
 	m_writable = writable;
 
 	if (writable)
-
-		m_st.open(name, std::ios::binary | std::ios::in | std::ios::out);
+		mode = "r+b";
 	else
-		m_st.open(name, std::ios::binary | std::ios::in);
+		mode = "rb";
 
-	if (!m_st.is_open())
+#ifdef _MSC_VER
+	fopen_s(&m_file, name, mode);
+#else
+	m_file = fopen(name, mode);
+#endif
+
+	if (m_file == nullptr)
 		return errno;
 
 	ReadHeader(m_hdr);
@@ -167,15 +179,22 @@ int AppleSparseimage::Open(const char* name, bool writable)
 
 void AppleSparseimage::Close()
 {
-	if (m_writable) {
-		if (m_current_node_offset)
-			WriteIndex(m_idx, m_current_node_offset);
-		else
-			WriteHeader(m_hdr);
-	}
+	if (m_file) {
+		if (m_writable) {
+			if (m_current_node_offset)
+				WriteIndex(m_idx, m_current_node_offset);
+			else
+				WriteHeader(m_hdr);
+		}
 
-	m_st.seekp(m_file_size);
-	m_st.close();
+#ifdef _MSC_VER
+		_fseeki64(m_file, m_file_size, SEEK_SET);
+#else
+		fseek(m_file, m_file_size, SEEK_SET);
+#endif
+		fclose(m_file);
+		m_file = nullptr;
+	}
 }
 
 int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
@@ -185,7 +204,7 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	uint8_t *out_data = reinterpret_cast<uint8_t *>(data);
 	size_t read_size;
-	std::streamsize nread;
+	size_t nread;
 
 	offset += GetPartitionStart();
 
@@ -202,11 +221,14 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 		band_offset = m_band_offset[band_id];
 		if (band_offset == 0) {
 			memset(out_data, 0, read_size);
+			nread = read_size;
 		} else {
-			m_st.seekg(band_offset + offset_in_band);
-			m_st.read(reinterpret_cast<char*>(out_data), read_size);
-			nread = m_st.gcount();
-			if (nread == 0) return errno;
+#ifdef _MSC_VER
+			_fseeki64(m_file, band_offset + offset_in_band, SEEK_SET);
+#else
+			fseek(m_file, band_offset + offset_in_band, SEEK_SET);
+#endif
+			nread = fread(out_data, 1, read_size, m_file);
 
 			// nread = pread64(m_fd, out_data, read_size, band_offset + offset_in_band);
 			// if (nread < 0) return errno;
@@ -227,7 +249,7 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	const uint8_t *in_data = reinterpret_cast<const uint8_t *>(data);
 	size_t write_size;
-	std::streamsize nwritten;
+	size_t nwritten;
 
 	offset += GetPartitionStart();
 
@@ -248,9 +270,12 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 		if (band_offset == 0)
 			band_offset = AllocBand(band_id);
 
-		m_st.seekp(band_offset + offset_in_band);
-		m_st.write(reinterpret_cast<const char*>(data), write_size);
-		nwritten = write_size; // Assuming ...
+#ifdef _MSC_VER
+		_fseeki64(m_file, band_offset + offset_in_band, SEEK_SET);
+#else
+		fseek(m_file, band_offset + offset_in_band, SEEK_SET);
+#endif
+		nwritten = fwrite(in_data, 1, write_size, m_file);
 
 		// nwritten = pwrite64(m_fd, in_data, write_size, band_offset + offset_in_band);
 		// if (nwritten < 0) return errno;
@@ -268,8 +293,8 @@ void AppleSparseimage::ReadHeader(AppleSparseimage::HeaderNode& hdr)
 	int k;
 	HeaderNode hdr_be;
 
-	m_st.seekg(0);
-	m_st.read(reinterpret_cast<char*>(&hdr_be), NODE_SIZE);
+	fseek(m_file, 0, SEEK_SET);
+	fread(&hdr_be, 1, NODE_SIZE, m_file);
 
 	// pread64(m_fd, &hdr_be, NODE_SIZE, 0);
 
@@ -303,8 +328,8 @@ void AppleSparseimage::WriteHeader(const AppleSparseimage::HeaderNode& hdr)
 	for (k = 0; k < 0x3F0; k++)
 		hdr_be.band_id[k] = htobe32(hdr.band_id[k]);
 
-	m_st.seekp(0);
-	m_st.write(reinterpret_cast<const char*>(&hdr_be), NODE_SIZE);
+	fseek(m_file, 0, SEEK_SET);
+	fwrite(&hdr_be, 1, NODE_SIZE, m_file);
 
 	// pwrite64(m_fd, &hdr_be, NODE_SIZE, 0);
 }
@@ -314,8 +339,12 @@ void AppleSparseimage::ReadIndex(AppleSparseimage::IndexNode& idx, uint64_t offs
 	int k;
 	IndexNode idx_be;
 
-	m_st.seekg(offset);
-	m_st.read(reinterpret_cast<char*>(&idx_be), NODE_SIZE);
+#ifdef _MSC_VER
+	_fseeki64(m_file, offset, SEEK_SET);
+#else
+	fseek(m_file, offset, SEEK_SET);
+#endif
+	fread(&idx_be, 1, NODE_SIZE, m_file);
 
 	// pread64(m_fd, &idx_be, NODE_SIZE, offset);
 
@@ -343,8 +372,12 @@ void AppleSparseimage::WriteIndex(const AppleSparseimage::IndexNode& idx, uint64
 	for (k = 0; k < 0x3F2; k++)
 		idx_be.band_id[k] = htobe32(idx.band_id[k]);
 
-	m_st.seekp(offset);
-	m_st.write(reinterpret_cast<const char*>(&idx_be), NODE_SIZE);
+#ifdef _MSC_VER
+	_fseeki64(m_file, offset, SEEK_SET);
+#else
+	fseek(m_file, offset, SEEK_SET);
+#endif
+	fwrite(&idx_be, 1, NODE_SIZE, m_file);
 
 	// pwrite64(m_fd, &idx_be, NODE_SIZE, offset);
 }
@@ -376,7 +409,7 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 	off = m_file_size;
 	m_file_size += m_band_size;
 	// ftruncate(m_fd, m_file_size);
-	m_st.seekp(m_file_size); // ?
+	// m_st.seekp(m_file_size); // ?
 	if (m_current_node_offset == 0)
 		m_hdr.band_id[m_next_free_band++] = band_id + 1;
 	else

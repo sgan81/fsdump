@@ -20,9 +20,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include <vector>
-#include <fstream>
 
 #include "Device.h"
 
@@ -88,7 +88,7 @@ private:
 	uint32_t m_next_index_node_nr;
 	uint32_t m_band_size;
 	int m_band_size_shift;
-	std::fstream m_st;
+	FILE* m_file;
 	bool m_writable;
 
 	HeaderNode m_hdr;
