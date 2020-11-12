@@ -60,18 +60,24 @@ bool DeviceLinux::Open(const char* name)
 		return false;
 	}
 
+#ifdef __linux__
 	struct stat64 st;
-
 	fstat64(m_device, &st);
+#endif
+#ifdef __APPLE__
+	struct stat st;
+	fstat(m_device, &st);
+#endif
 
 	if (S_ISREG(st.st_mode)) {
 		m_size = st.st_size;
+#ifdef __linux__
 	} else if (S_ISBLK(st.st_mode)) {
 		// Hmmm ...
-#ifdef __linux__
 		ioctl(m_device, BLKGETSIZE64, &m_size);
 #endif
 #ifdef __APPLE__
+	} else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {
 		uint64_t sector_count = 0;
 		uint32_t sector_size = 0;
 
@@ -82,9 +88,10 @@ bool DeviceLinux::Open(const char* name)
 
 		printf("sector size  = %d\n", sector_size);
 		printf("sector count = %" PRIu64 "\n", sector_count);
+		printf("st.st_mode = %X\n", st.st_mode);
 #endif
 	} else {
-		fprintf(stderr, "I don't know what to do with this kind of file ...\n");
+		fprintf(stderr, "I don't know what to do with this kind of file (mode = %X)...\n", st.st_mode);
 	}
 
 	SetPartitionLimits(0, m_size);
