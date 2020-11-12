@@ -26,7 +26,7 @@
 #include "Device.h"
 #include "apfs_layout.h"
 
-#define dbg_printf(...) // printf(__VA_ARGS__)
+#define dbg_printf(...) printf(__VA_ARGS__)
 
 static constexpr size_t BUF_SIZE = 0x400000;
 
@@ -75,20 +75,26 @@ int Apfs::CopyData(Device& dst)
 	base = le64toh(nxsb->nx_xp_desc_base);
 	idx = le32toh(nxsb->nx_xp_desc_index);
 	for (;;) {
-		idx = idx + le32toh(nxsb->nx_xp_desc_len) - 1;
-		if (idx >= le32toh(nxsb->nx_xp_desc_blocks)) idx -= le32toh(nxsb->nx_xp_desc_blocks);
 		rc = ReadVerifiedBlock(base + idx, nxsb);
 		if (rc) goto error;
+		if ((le32toh(nxsb->nx_o.o_type) & OBJECT_TYPE_MASK) != OBJECT_TYPE_NX_SUPERBLOCK) {
+			idx++;
+			if (idx >= le32toh(nxsb->nx_xp_desc_blocks)) idx -= le32toh(nxsb->nx_xp_desc_blocks);
+			continue;
+		}
 		dbg_printf("XP srch: nxsb @ %" PRIX64 " xid %" PRId64 "\n", base, le64toh(nxsb->nx_o.o_xid));
 		if (le64toh(nxsb->nx_o.o_xid) < max_xid)
 			break;
 		max_xid = le64toh(nxsb->nx_o.o_xid);
 		max_paddr = base + idx;
-		idx = le32toh(nxsb->nx_xp_desc_next);
+
+		idx++;
+		if (idx >= le32toh(nxsb->nx_xp_desc_blocks)) idx -= le32toh(nxsb->nx_xp_desc_blocks);
 	}
 
 	rc = ReadVerifiedBlock(max_paddr, nxsb);
 	if (rc) goto error;
+	dbg_printf("Using nxsb xid %" PRIX64 "\n", le64toh(nxsb->nx_o.o_xid));
 
 	cpm = reinterpret_cast<checkpoint_map_phys_t *>(malloc(NX_DEFAULT_BLOCK_SIZE));
 	idx = le32toh(nxsb->nx_xp_desc_index);
@@ -257,7 +263,7 @@ int Apfs::CopyRange(Device& dst, uint64_t paddr, uint64_t blocks)
 	uint64_t size;
 	size_t bsize;
 
-	dbg_printf("CopyRange %" PRIX64 " L %" PRIX64 "\n", paddr, blocks);
+	// dbg_printf("CopyRange %" PRIX64 " L %" PRIX64 "\n", paddr, blocks);
 
 	off = paddr << 12;
 	size = blocks << 12;

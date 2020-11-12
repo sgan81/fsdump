@@ -29,3 +29,4 @@ Vhdx.h
 if(APPLE)
 target_include_directories(fsdump PRIVATE compat)
 endif()
+target_compile_definitions(fsdump PUBLIC _FILE_OFFSET_BITS=64 _DARWIN_USE_64_BIT_INODE)

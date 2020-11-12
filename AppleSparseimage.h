@@ -18,9 +18,15 @@
 
 #pragma once
 
+#ifdef _MSC_VER
+#define SPARSEIMAGE_USE_STDIO
+#endif
+
 #include <cstddef>
 #include <cstdint>
+#ifdef SPARSEIMAGE_USE_STDIO
 #include <cstdio>
+#endif
 
 #include <vector>
 
@@ -88,10 +94,14 @@ private:
 	uint32_t m_next_index_node_nr;
 	uint32_t m_band_size;
 	int m_band_size_shift;
+#ifdef SPARSEIMAGE_USE_STDIO
 	FILE* m_file;
+#else
+	int m_fd;
+#endif
+
 	bool m_writable;
 
 	HeaderNode m_hdr;
 	IndexNode m_idx;
 };
-

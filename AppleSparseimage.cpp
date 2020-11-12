@@ -20,6 +20,11 @@
 #include <cerrno>
 #include <cstring>
 
+#ifndef SPARSEIMAGE_USE_STDIO
+#include <unistd.h>
+#include <fcntl.h>
+#endif
+
 #include <endian.h>
 
 #include "AppleSparseimage.h"
@@ -54,7 +59,11 @@ AppleSparseimage::AppleSparseimage()
 	m_next_index_node_nr = 0;
 	m_band_size = 0;
 	m_band_size_shift = 0;
+#ifdef SPARSEIMAGE_USE_STDIO
 	m_file = nullptr;
+#else
+	m_fd = -1;
+#endif
 	m_writable = false;
 }
 
@@ -69,14 +78,19 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 
 	m_writable = true;
 
+#ifdef SPARSEIMAGE_USE_STDIO
 #ifdef _MSC_VER
 	fopen_s(&m_file, name, "w+b");
 #else
 	m_file = fopen(name, "w+b");
-#endif
-
 	if (m_file == nullptr)
 		return errno;
+#endif
+#else
+	m_fd = open(name, O_CREAT | O_TRUNC | O_RDWR, 0644);
+	if (m_fd < 0)
+		return errno;
+#endif
 
 	m_hdr.signature = SPRS_SIGNATURE;
 	m_hdr.version = 3;
@@ -109,10 +123,11 @@ int AppleSparseimage::Open(const char* name, bool writable)
 	size_t n;
 	uint64_t offset;
 	uint64_t node_offset;
-	const char* mode;
 
 	m_writable = writable;
 
+#ifdef SPARSEIMAGE_USE_STDIO
+	const char* mode;
 	if (writable)
 		mode = "r+b";
 	else
@@ -123,9 +138,13 @@ int AppleSparseimage::Open(const char* name, bool writable)
 #else
 	m_file = fopen(name, mode);
 #endif
-
 	if (m_file == nullptr)
 		return errno;
+#else
+	m_fd = open(name, writable ? O_RDWR : O_RDONLY);
+	if (m_fd < 0)
+		return errno;
+#endif
 
 	ReadHeader(m_hdr);
 
@@ -179,6 +198,7 @@ int AppleSparseimage::Open(const char* name, bool writable)
 
 void AppleSparseimage::Close()
 {
+#ifdef SPARSEIMAGE_USE_STDIO
 	if (m_file) {
 		if (m_writable) {
 			if (m_current_node_offset)
@@ -195,6 +215,18 @@ void AppleSparseimage::Close()
 		fclose(m_file);
 		m_file = nullptr;
 	}
+#else
+	if (m_fd >= 0) {
+		if (m_writable) {
+			if (m_current_node_offset)
+				WriteIndex(m_idx, m_current_node_offset);
+			else
+				WriteHeader(m_hdr);
+		}
+		close(m_fd);
+		m_fd = -1;
+	}
+#endif
 }
 
 int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
@@ -223,15 +255,17 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 			memset(out_data, 0, read_size);
 			nread = read_size;
 		} else {
+#ifdef SPARSEIMAGE_USE_STDIO
 #ifdef _MSC_VER
 			_fseeki64(m_file, band_offset + offset_in_band, SEEK_SET);
 #else
 			fseek(m_file, band_offset + offset_in_band, SEEK_SET);
 #endif
 			nread = fread(out_data, 1, read_size, m_file);
-
-			// nread = pread64(m_fd, out_data, read_size, band_offset + offset_in_band);
-			// if (nread < 0) return errno;
+#else
+			nread = pread(m_fd, out_data, read_size, band_offset + offset_in_band);
+			if (nread < 0) return errno;
+#endif
 		}
 
 		size -= nread;
@@ -270,15 +304,17 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 		if (band_offset == 0)
 			band_offset = AllocBand(band_id);
 
+#ifdef SPARSEIMAGE_USE_STDIO
 #ifdef _MSC_VER
 		_fseeki64(m_file, band_offset + offset_in_band, SEEK_SET);
 #else
 		fseek(m_file, band_offset + offset_in_band, SEEK_SET);
 #endif
 		nwritten = fwrite(in_data, 1, write_size, m_file);
-
-		// nwritten = pwrite64(m_fd, in_data, write_size, band_offset + offset_in_band);
-		// if (nwritten < 0) return errno;
+#else
+		nwritten = pwrite(m_fd, in_data, write_size, band_offset + offset_in_band);
+		if (nwritten < 0) return errno;
+#endif
 
 		size -= nwritten;
 		offset += nwritten;
@@ -293,10 +329,12 @@ void AppleSparseimage::ReadHeader(AppleSparseimage::HeaderNode& hdr)
 	int k;
 	HeaderNode hdr_be;
 
+#ifdef SPARSEIMAGE_USE_STDIO
 	fseek(m_file, 0, SEEK_SET);
 	fread(&hdr_be, 1, NODE_SIZE, m_file);
-
-	// pread64(m_fd, &hdr_be, NODE_SIZE, 0);
+#else
+	pread(m_fd, &hdr_be, NODE_SIZE, 0);
+#endif
 
 	hdr.signature = be32toh(hdr_be.signature);
 	hdr.version = be32toh(hdr_be.version);
@@ -328,10 +366,12 @@ void AppleSparseimage::WriteHeader(const AppleSparseimage::HeaderNode& hdr)
 	for (k = 0; k < 0x3F0; k++)
 		hdr_be.band_id[k] = htobe32(hdr.band_id[k]);
 
+#ifdef SPARSEIMAGE_USE_STDIO
 	fseek(m_file, 0, SEEK_SET);
 	fwrite(&hdr_be, 1, NODE_SIZE, m_file);
-
-	// pwrite64(m_fd, &hdr_be, NODE_SIZE, 0);
+#else
+	pwrite(m_fd, &hdr_be, NODE_SIZE, 0);
+#endif
 }
 
 void AppleSparseimage::ReadIndex(AppleSparseimage::IndexNode& idx, uint64_t offset)
@@ -339,14 +379,16 @@ void AppleSparseimage::ReadIndex(AppleSparseimage::IndexNode& idx, uint64_t offs
 	int k;
 	IndexNode idx_be;
 
+#ifdef SPARSEIMAGE_USE_STDIO
 #ifdef _MSC_VER
 	_fseeki64(m_file, offset, SEEK_SET);
 #else
 	fseek(m_file, offset, SEEK_SET);
 #endif
 	fread(&idx_be, 1, NODE_SIZE, m_file);
-
-	// pread64(m_fd, &idx_be, NODE_SIZE, offset);
+#else
+	pread(m_fd, &idx_be, NODE_SIZE, offset);
+#endif
 
 	idx.signature = be32toh(idx_be.signature);
 	idx.index_node_nr = be32toh(idx_be.index_node_nr);
@@ -372,14 +414,16 @@ void AppleSparseimage::WriteIndex(const AppleSparseimage::IndexNode& idx, uint64
 	for (k = 0; k < 0x3F2; k++)
 		idx_be.band_id[k] = htobe32(idx.band_id[k]);
 
+#ifdef SPARSEIMAGE_USE_STDIO
 #ifdef _MSC_VER
 	_fseeki64(m_file, offset, SEEK_SET);
 #else
 	fseek(m_file, offset, SEEK_SET);
 #endif
 	fwrite(&idx_be, 1, NODE_SIZE, m_file);
-
-	// pwrite64(m_fd, &idx_be, NODE_SIZE, offset);
+#else
+	pwrite(m_fd, &idx_be, NODE_SIZE, offset);
+#endif
 }
 
 uint64_t AppleSparseimage::AllocBand(size_t band_id)
@@ -408,8 +452,7 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 
 	off = m_file_size;
 	m_file_size += m_band_size;
-	// ftruncate(m_fd, m_file_size);
-	// m_st.seekp(m_file_size); // ?
+	ftruncate(m_fd, m_file_size);
 	if (m_current_node_offset == 0)
 		m_hdr.band_id[m_next_free_band++] = band_id + 1;
 	else
