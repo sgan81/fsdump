@@ -18,7 +18,7 @@
 
 #pragma once
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 
 #include <cstddef>
 #include "Device.h"

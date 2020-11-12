@@ -16,16 +16,22 @@
 	along with fsdump.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
+#ifdef __linux__
 #include <linux/fs.h>
+#endif
+#ifdef __APPLE__
+#include <sys/disk.h>
+#endif
 #include <errno.h>
 #include <cstdio>
 #include <cstring>
+#include <cinttypes>
 
 #include "DeviceLinux.h"
 
@@ -42,7 +48,12 @@ DeviceLinux::~DeviceLinux()
 
 bool DeviceLinux::Open(const char* name)
 {
+#ifdef __linux__
 	m_device = open(name, O_RDONLY | O_LARGEFILE);
+#endif
+#ifdef __APPLE__
+	m_device = open(name, O_RDONLY);
+#endif
 
 	if (m_device < 0) {
 		perror("Error opening device: ");
@@ -57,7 +68,21 @@ bool DeviceLinux::Open(const char* name)
 		m_size = st.st_size;
 	} else if (S_ISBLK(st.st_mode)) {
 		// Hmmm ...
+#ifdef __linux__
 		ioctl(m_device, BLKGETSIZE64, &m_size);
+#endif
+#ifdef __APPLE__
+		uint64_t sector_count = 0;
+		uint32_t sector_size = 0;
+
+		ioctl(m_device, DKIOCGETBLOCKCOUNT, &sector_count);
+		ioctl(m_device, DKIOCGETBLOCKSIZE, &sector_size);
+
+		m_size = sector_size * sector_count;
+
+		printf("sector size  = %d\n", sector_size);
+		printf("sector count = %" PRIu64 "\n", sector_count);
+#endif
 	} else {
 		fprintf(stderr, "I don't know what to do with this kind of file ...\n");
 	}
@@ -83,7 +108,12 @@ int DeviceLinux::Read(void* data, size_t size, uint64_t offset)
 	offset += GetPartitionStart();
 
 	while (size > 0) {
+#ifdef __linux__
 		nread = pread64(m_device, pdata, size, offset);
+#endif
+#ifdef __APPLE__
+		nread = pread(m_device, pdata, size, offset);
+#endif
 		if (nread < 0) return errno;
 		size -= nread;
 		offset += nread;
