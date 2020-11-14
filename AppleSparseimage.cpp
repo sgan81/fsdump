@@ -236,7 +236,7 @@ int AppleSparseimage::Read(void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	uint8_t *out_data = reinterpret_cast<uint8_t *>(data);
 	size_t read_size;
-	size_t nread;
+	ssize_t nread;
 
 	offset += GetPartitionStart();
 
@@ -283,7 +283,7 @@ int AppleSparseimage::Write(const void* data, size_t size, uint64_t offset)
 	uint32_t offset_in_band;
 	const uint8_t *in_data = reinterpret_cast<const uint8_t *>(data);
 	size_t write_size;
-	size_t nwritten;
+	ssize_t nwritten;
 
 	offset += GetPartitionStart();
 
