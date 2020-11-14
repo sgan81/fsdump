@@ -64,6 +64,7 @@ int Apfs::CopyData(Device& dst)
 	if (le32toh(nxsb->nx_magic) != NX_MAGIC) goto error;
 	if (le32toh(nxsb->nx_block_size) != NX_DEFAULT_BLOCK_SIZE) goto error;
 
+	/*
 	CopyRange(dst, 0, 1);
 	base = le64toh(nxsb->nx_xp_desc_base);
 	size = le32toh(nxsb->nx_xp_desc_blocks);
@@ -71,12 +72,14 @@ int Apfs::CopyData(Device& dst)
 	base = le64toh(nxsb->nx_xp_data_base);
 	size = le32toh(nxsb->nx_xp_data_blocks);
 	CopyRange(dst, base, size);
+	 */
 
 	base = le64toh(nxsb->nx_xp_desc_base);
 	idx = le32toh(nxsb->nx_xp_desc_index);
 	for (;;) {
-		rc = ReadVerifiedBlock(base + idx, nxsb);
+		rc = ReadBlock(base + idx, nxsb);
 		if (rc) goto error;
+		if (!VerifyBlock(nxsb, 0x1000)) break;
 		if ((le32toh(nxsb->nx_o.o_type) & OBJECT_TYPE_MASK) != OBJECT_TYPE_NX_SUPERBLOCK) {
 			idx++;
 			if (idx >= le32toh(nxsb->nx_xp_desc_blocks)) idx -= le32toh(nxsb->nx_xp_desc_blocks);
@@ -237,6 +240,8 @@ int Apfs::ReadBlock(uint64_t paddr, void* data, size_t size)
 	return m_srcdev.Read(data, size, off);
 }
 
+void DumpHex(const void *vdata, uint32_t size);
+
 int Apfs::ReadVerifiedBlock(uint64_t paddr, void* data, size_t size)
 {
 	int err;
@@ -244,7 +249,8 @@ int Apfs::ReadVerifiedBlock(uint64_t paddr, void* data, size_t size)
 	err = ReadBlock(paddr, data, size);
 	if (err) return err;
 	if (!VerifyBlock(data, size)) {
-		fprintf(stderr, "Block verification failed.\n");
+		fprintf(stderr, "Block verification failed @ %" PRId64 ".\n", paddr);
+		// DumpHex(data, size);
 		return EINVAL;
 	}
 	return 0;

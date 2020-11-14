@@ -89,7 +89,8 @@ private:
 	std::vector<uint64_t> m_band_offset;
 	uint64_t m_drive_size;
 	uint64_t m_current_node_offset;
-	uint64_t m_file_size;
+	uint64_t m_logical_size;
+	uint64_t m_physical_size;
 	uint32_t m_next_free_band;
 	uint32_t m_next_index_node_nr;
 	uint32_t m_band_size;
