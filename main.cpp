@@ -85,6 +85,7 @@ int CopyPartition(Device &src, Device &dst)
 	uint8_t test[0x1000];
 
 	src.Read(test, src.GetSectorSize(), 0);
+	printf("\n");
 	DumpHex(test, 0x200);
 
 	if (!memcmp(test + 32, "NXSB", 4)) {

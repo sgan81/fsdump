@@ -334,9 +334,7 @@ bool Ntfs::FixUpdSeqRecord(uint8_t* out, const uint8_t* in, size_t size)
 
 void Ntfs::DumpMFTEntry(const uint8_t* prec, uint64_t idx)
 {
-	uint16_t off;
-	const uint16_t *usa;
-	uint16_t *rec_u16;
+    uint16_t off;
 	uint8_t record[0x400];
 	const FILE_RECORD_SEGMENT_HEADER *frsh;
 	const ATTRIBUTE_RECORD_HEADER *atrh;

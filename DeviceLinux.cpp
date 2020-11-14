@@ -133,6 +133,21 @@ int DeviceLinux::Read(void* data, size_t size, uint64_t offset)
 int DeviceLinux::Write(const void *data, size_t size, uint64_t offset)
 {
 	return ENOTSUP;
+
+	ssize_t nwritten;
+	const uint8_t *pdata = reinterpret_cast<const uint8_t *>(data);
+
+	offset += GetPartitionStart();
+
+	while (size > 0) {
+		nwritten = pwrite(m_device, pdata, size, offset);
+		if (nwritten < 0) return errno;
+		size -= nwritten;
+		offset += nwritten;
+		pdata += nwritten;
+	}
+
+	return 0;
 }
 
 #endif

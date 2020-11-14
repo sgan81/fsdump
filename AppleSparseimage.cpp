@@ -54,7 +54,8 @@ AppleSparseimage::AppleSparseimage()
 {
 	m_drive_size = 0;
 	m_current_node_offset = 0;
-	m_file_size = 0;
+	m_logical_size = 0;
+	m_physical_size = 0;
 	m_next_free_band = 0;
 	m_next_index_node_nr = 0;
 	m_band_size = 0;
@@ -104,7 +105,7 @@ int AppleSparseimage::Create(const char* name, uint64_t size)
 
 	m_drive_size = m_hdr.total_sectors * SECTOR_SIZE;
 	m_current_node_offset = 0;
-	m_file_size = NODE_SIZE;
+	m_logical_size = NODE_SIZE;
 	m_next_free_band = 0;
 	m_next_index_node_nr = 0;
 	m_band_size = BAND_SIZE;
@@ -158,7 +159,8 @@ int AppleSparseimage::Open(const char* name, bool writable)
 	m_band_size_shift = ilog2(m_band_size); // TODO: ILog2
 
 	m_current_node_offset = 0;
-	m_file_size = 0;
+	m_logical_size = 0;
+	m_physical_size = 0;
 	m_next_free_band = 0;
 	m_next_index_node_nr = 0;
 
@@ -189,7 +191,8 @@ int AppleSparseimage::Open(const char* name, bool writable)
 		m_next_index_node_nr = m_idx.index_node_nr + 1;
 	}
 
-	m_file_size = offset;
+	m_logical_size = offset;
+	m_physical_size = offset;
 
 	SetPartitionLimits(0, m_drive_size);
 
@@ -208,9 +211,9 @@ void AppleSparseimage::Close()
 		}
 
 #ifdef _MSC_VER
-		_fseeki64(m_file, m_file_size, SEEK_SET);
+		_fseeki64(m_file, m_logical_size, SEEK_SET);
 #else
-		fseek(m_file, m_file_size, SEEK_SET);
+		fseek(m_file, m_logical_size, SEEK_SET);
 #endif
 		fclose(m_file);
 		m_file = nullptr;
@@ -223,6 +226,7 @@ void AppleSparseimage::Close()
 			else
 				WriteHeader(m_hdr);
 		}
+		ftruncate(m_fd, m_logical_size);
 		close(m_fd);
 		m_fd = -1;
 	}
@@ -432,14 +436,14 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 
 	if ((m_current_node_offset == 0 && m_next_free_band >= 0x3F0) || (m_current_node_offset != 0 && m_next_free_band >= 0x3F2)) {
 		if (m_current_node_offset == 0) {
-			m_hdr.next_index_node_offset = m_file_size;
+			m_hdr.next_index_node_offset = m_logical_size;
 			WriteHeader(m_hdr);
 		} else {
-			m_idx.next_index_node_offset = m_file_size;
+			m_idx.next_index_node_offset = m_logical_size;
 			WriteIndex(m_idx, m_current_node_offset);
 		}
 
-		m_current_node_offset = m_file_size;
+		m_current_node_offset = m_logical_size;
 		m_idx.signature = SPRS_SIGNATURE;
 		m_idx.index_node_nr = m_next_index_node_nr++;
 		m_idx.flags = 1;
@@ -447,12 +451,15 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 		for (size_t n = 0; n < 0x3F2; n++)
 			m_idx.band_id[n] = 0;
 		m_next_free_band = 0;
-		m_file_size += NODE_SIZE;
+		m_logical_size += NODE_SIZE;
 	}
 
-	off = m_file_size;
-	m_file_size += m_band_size;
-	ftruncate(m_fd, m_file_size);
+	off = m_logical_size;
+	m_logical_size += m_band_size;
+	if (m_physical_size < m_logical_size) {
+		m_physical_size = m_logical_size + 0x1000000;
+		ftruncate(m_fd, m_physical_size);
+	}
 	if (m_current_node_offset == 0)
 		m_hdr.band_id[m_next_free_band++] = band_id + 1;
 	else
