@@ -167,8 +167,6 @@ int main(int argc, char *argv[])
 			sprs.ResetPartitionLimits();
 
 			pt++;
-
-			if (pt == 3) break; // Test
 		}
 	} else {
 		MasterBootRecord mbr;

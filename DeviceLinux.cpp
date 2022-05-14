@@ -121,7 +121,10 @@ int DeviceLinux::Read(void* data, size_t size, uint64_t offset)
 #ifdef __APPLE__
 		nread = pread(m_device, pdata, size, offset);
 #endif
-		if (nread < 0) return errno;
+		if (nread < 0) {
+			perror("Error reading from device");
+			return errno;
+		}
 		size -= nread;
 		offset += nread;
 		pdata += nread;
@@ -141,7 +144,10 @@ int DeviceLinux::Write(const void *data, size_t size, uint64_t offset)
 
 	while (size > 0) {
 		nwritten = pwrite(m_device, pdata, size, offset);
-		if (nwritten < 0) return errno;
+		if (nwritten < 0) {
+			perror("Error writing to device");
+			return errno;
+		}
 		size -= nwritten;
 		offset += nwritten;
 		pdata += nwritten;
