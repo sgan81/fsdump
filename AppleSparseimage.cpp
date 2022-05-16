@@ -20,6 +20,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "AppleSparseimage.h"
+
 #ifndef SPARSEIMAGE_USE_STDIO
 #include <unistd.h>
 #include <fcntl.h>
@@ -27,7 +29,9 @@
 
 #include <endian.h>
 
-#include "AppleSparseimage.h"
+#ifdef _MSC_VER
+typedef intptr_t ssize_t;
+#endif
 
 static constexpr int SECTOR_SIZE = 0x200;
 static constexpr size_t NODE_SIZE = 0x1000;
@@ -458,7 +462,11 @@ uint64_t AppleSparseimage::AllocBand(size_t band_id)
 	m_logical_size += m_band_size;
 	if (m_physical_size < m_logical_size) {
 		m_physical_size = m_logical_size + 0x1000000;
+#ifdef SPARSEIMAGE_USE_STDIO
+
+#else
 		ftruncate(m_fd, m_physical_size);
+#endif
 	}
 	if (m_current_node_offset == 0)
 		m_hdr.band_id[m_next_free_band++] = band_id + 1;

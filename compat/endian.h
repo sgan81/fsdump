@@ -11,6 +11,9 @@
 #define le16toh(x) x
 #define le32toh(x) x
 #define le64toh(x) x
+#define htole16(x) x
+#define htole32(x) x
+#define htole64(x) x
 
 static inline uint16_t be16toh(uint16_t x) { return _byteswap_ushort(x); }
 static inline uint32_t be32toh(uint32_t x) { return _byteswap_ulong(x); }
