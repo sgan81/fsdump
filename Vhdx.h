@@ -3,10 +3,17 @@
 #include <cstdint>
 #include <cstdio>
 
+#include <vector>
+
 #include "Device.h"
 #include "Crc32.h"
 
 struct MS_GUID {
+	bool operator==(const MS_GUID& o) const
+	{
+		return !memcmp(this, &o, sizeof(MS_GUID));
+	}
+
 	uint8_t d[16];
 };
 
@@ -42,18 +49,11 @@ struct VHDX_REGION_TABLE_ENTRY {
 	uint32_t Length;
 	uint32_t Flags;
 };
-static constexpr uint32_t FLAG_REQUIRED = 0x00000001;
 
 struct VHDX_REGION_TABLE {
 	VHDX_REGION_TABLE_HEADER hdr;
 	VHDX_REGION_TABLE_ENTRY entries[2047];
 };
-
-// static constexpr MS_GUID GUID_BAT = { 0x2DC27766, 0xF623, 0x4200, { 0x9D, 0x64, 0x11, 0x5E, 0x9B, 0xFD, 0x4A, 0x08 }};
-// static constexpr MS_GUID GUID_Metadata = { 0x8B7CA206, 0x4790, 0x4B9A, { 0xB8, 0xFE, 0x57, 0x5F, 0x05, 0x0F, 0x88, 0x6E }};
-
-static constexpr MS_GUID GUID_BAT = { 0x66, 0x77, 0xC2, 0x2D, 0x23, 0xF6, 0x00, 0x42, 0x9D, 0x64, 0x11, 0x5E, 0x9B, 0xFD, 0x4A, 0x08 };
-static constexpr MS_GUID GUID_Metadata = { 0x06, 0xA2, 0x7C, 0x8B, 0x90, 0x47, 0x9A, 0x4B, 0xB8, 0xFE, 0x57, 0x5F, 0x05, 0x0F, 0x88, 0x6E };
 
 struct VHDX_LOG_ENTRY_HEADER {
 	uint32_t Signature; // 'loge'
@@ -79,7 +79,7 @@ struct VHDX_LOG_ZERO_DESCRIPTOR {
 struct VHDX_LOG_DATA_DESCRIPTOR {
 	uint32_t DataSignature; // 'desc'
 	uint32_t TrailingBytes;
-	uint64_t LeadingBytes;
+	uint32_t LeadingBytes[2];
 	uint64_t FileOffset;
 	uint64_t SequenceNumber;
 };
@@ -122,11 +122,8 @@ struct VHDX_METADATA_TABLE_ENTRY {
 	uint32_t Offset;
 	uint32_t Length;
 	uint32_t Flags;
+	uint32_t Reserved2;
 };
-
-static constexpr uint32_t META_FLAGS_IS_USER = 1;
-static constexpr uint32_t META_FLAGS_IS_VIRTUAL_DISK = 2;
-static constexpr uint32_t META_FLAGS_IS_REQUIRED = 4;
 
 /*
 static constexpr MS_GUID GUID_FILE_PARAMETERS = { 0xCAA16737, 0xFA36, 0x4D34, { 0xB3, 0xB6, 0x33, 0xF0, 0xAA, 0x44, 0xE7, 0x6B }};
@@ -149,15 +146,15 @@ struct VHDX_VIRTUAL_DISK_SIZE {
 	uint64_t VirtualDiskSize;
 };
 
-struct VHDX_PAGE83_DATA {
-	MS_GUID Page83Data;
+struct VHDX_VIRTUAL_DISK_ID {
+	MS_GUID VirtualDiskId;
 };
 
-struct VHDX_VIRTUAL_DISK_LOGICAL_SECTOR_SIZE {
+struct VHDX_LOGICAL_SECTOR_SIZE {
 	uint32_t LogicalSectorSize;
 };
 
-struct VHDX_VIRTUAL_DISK_PHYSICAL_SECTOR_SIZE {
+struct VHDX_PHYSICAL_SECTOR_SIZE {
 	uint32_t PhysicalSectorSize;
 };
 
@@ -181,7 +178,7 @@ public:
 	~VhdxDevice();
 
 	int Create(const char* name, uint64_t size);
-	int Open(const char* name, bool writable);
+	int Open(const char* name, bool writable = false);
 	void Close();
 
 	int Read(void* data, size_t size, uint64_t offset) override;
@@ -194,6 +191,13 @@ private:
 	int WriteHeader(const VHDX_HEADER& header, uint64_t offset);
 	int ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset);
 	int WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset);
+	int ReadMetadata(uint64_t offset, uint32_t length);
+	int ReadBAT(uint64_t offset, uint32_t length);
+
+	int LogReplay();
+	int LogStart();
+	int LogWrite(uint64_t offset, void* block_4k);
+	int LogCommit();
 
 	void GenerateRandomGUID(MS_GUID& guid);
 
@@ -208,11 +212,35 @@ private:
 
 	VHDX_FILE_IDENTIFIER m_ident;
 	VHDX_HEADER m_head[2];
-	VHDX_REGION_TABLE_HEADER m_regi[2];
+	VHDX_REGION_TABLE m_regi[2];
 
 	Crc32 m_crc;
 	FILE* m_file;
 	bool m_writable;
+	int m_active_header;
 
 	uint8_t m_cache[0x10000];
+	std::vector<uint8_t> m_log_b;
+	std::vector<uint64_t> m_bat_b;
+	std::vector<uint8_t> m_meta_b;
+
+	uint64_t m_bat_offset;
+	uint32_t m_bat_size;
+	uint32_t m_bat_flags;
+	uint64_t m_meta_offset;
+	uint32_t m_meta_size;
+	uint32_t m_meta_flags;
+
+	uint32_t m_block_size;
+	bool m_leave_alloc;
+	bool m_has_parent;
+	uint64_t m_disk_size;
+	uint32_t m_sector_size_logical;
+	uint32_t m_sector_size_physical;
+	MS_GUID m_virtual_disk_id;
+
+	uint64_t m_chunk_ratio;
+	uint64_t m_data_blocks_count;
+	uint64_t m_sector_bitmap_blocks_count;
+	uint64_t m_bat_entries_cnt;
 };

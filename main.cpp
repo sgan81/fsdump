@@ -28,6 +28,7 @@
 #include "MasterBootRecord.h"
 #include "Apfs.h"
 #include "Ntfs.h"
+#include "Vhdx.h"
 
 void DumpHex(const void *vdata, uint32_t size)
 {
@@ -112,7 +113,8 @@ int main(int argc, char *argv[])
 {
 	AppleSparseimage sprs;
 #ifdef WIN32
-	DeviceWindows bdev;
+	// DeviceWindows bdev;
+	VhdxDevice bdev;
 #else
 	DeviceLinux bdev;
 #endif
@@ -131,7 +133,7 @@ int main(int argc, char *argv[])
 		return EINVAL;
 	}
 
-	if (!bdev.Open(argv[1]))
+	if (bdev.Open(argv[1]))
 	{
 		fprintf(stderr, "Unable to open device %s\n", argv[1]);
 		return ENOENT;
