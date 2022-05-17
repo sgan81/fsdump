@@ -190,6 +190,7 @@ private:
 	int ReadHeader(VHDX_HEADER& header, uint64_t offset);
 	int WriteHeader(const VHDX_HEADER& header, uint64_t offset);
 	int ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset);
+	int SetupRegionTable(VHDX_REGION_TABLE& table);
 	int WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset);
 	int ReadMetadata(uint64_t offset, uint32_t length);
 	int ReadBAT(uint64_t offset, uint32_t length);
@@ -203,6 +204,7 @@ private:
 
 	int ImgRead(uint64_t offset, void* buffer, size_t size);
 	int ImgWrite(uint64_t offset, const void* buffer, size_t size);
+	int ImgResize(uint64_t size);
 
 	// Layout:
 	// File identifier
@@ -243,4 +245,7 @@ private:
 	uint64_t m_data_blocks_count;
 	uint64_t m_sector_bitmap_blocks_count;
 	uint64_t m_bat_entries_cnt;
+
+	// Writing ...
+	uint64_t m_img_size;
 };

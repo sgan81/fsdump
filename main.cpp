@@ -111,7 +111,8 @@ int CopyPartition(Device &src, Device &dst)
 
 int main(int argc, char *argv[])
 {
-	AppleSparseimage sprs;
+	// AppleSparseimage sprs;
+	VhdxDevice sprs;
 #ifdef WIN32
 	// DeviceWindows bdev;
 	VhdxDevice bdev;

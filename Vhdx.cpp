@@ -36,6 +36,8 @@ static constexpr uint32_t META_FLAGS_IS_USER = 1;
 static constexpr uint32_t META_FLAGS_IS_VIRTUAL_DISK = 2;
 static constexpr uint32_t META_FLAGS_IS_REQUIRED = 4;
 
+#if 1
+
 #define trace printf
 
 static void trace_guid(const MS_GUID& guid, const char *pfx)
@@ -53,6 +55,11 @@ static void trace_guid(const MS_GUID& guid, const char *pfx)
 	if (pfx)
 		printf("\n");
 }
+
+#else
+#define trace(...)
+#define trace_guid(guid, pfx)
+#endif
 
 VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(), m_cache(), m_virtual_disk_id()
 {
@@ -81,6 +88,8 @@ VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(
 	m_data_blocks_count = 0;
 	m_sector_bitmap_blocks_count = 0;
 	m_bat_entries_cnt = 0;
+
+	m_img_size = 0;
 }
 
 VhdxDevice::~VhdxDevice()
@@ -90,7 +99,87 @@ VhdxDevice::~VhdxDevice()
 
 int VhdxDevice::Create(const char* name, uint64_t size)
 {
-	return 0;
+	errno_t err;
+	int n;
+	static const char16_t* creator = u"FsDump 0.1";
+	uint64_t page_ptr = 0x100000;
+
+	Close();
+
+	err = fopen_s(&m_file, name, "wb");
+	if (err) return err;
+
+	m_writable = true;
+
+	m_disk_size = size;
+	m_sector_size_logical = 512; // Assuming ...
+	m_sector_size_physical = 4096; // Assuming as well ...
+	// TODO get these from the device and pass as parameters ...
+	m_block_size = 0x2000000;
+
+	m_chunk_ratio = (static_cast<uint64_t>(m_sector_size_logical) << 23) / m_block_size;
+	m_data_blocks_count = (m_disk_size + m_block_size - 1) / m_block_size;
+	m_sector_bitmap_blocks_count = (m_data_blocks_count + m_chunk_ratio - 1) / m_chunk_ratio;
+	m_bat_entries_cnt = m_data_blocks_count + (m_data_blocks_count - 1) / m_chunk_ratio;
+
+	{
+		memset(m_cache, 0, sizeof(m_cache));
+		VHDX_FILE_IDENTIFIER* id = reinterpret_cast<VHDX_FILE_IDENTIFIER*>(m_cache);
+		id->Signature = htole64(VHDX_SIGNATURE);
+		for (n = 0; creator[n] != 0; n++)
+			id->Creator[n] = htole16(creator[n]);
+		id->Creator[n] = 0;
+		ImgWrite(0, m_cache, 0x10000);
+	}
+
+	m_head[0].Signature = VHDX_SIG_HEAD;
+	m_head[0].Checksum = 0;
+	m_head[0].SequenceNumber = 1;
+	GenerateRandomGUID(m_head[0].FileWriteGuid);
+	GenerateRandomGUID(m_head[0].DataWriteGuid);
+	m_head[0].LogGuid = GUID_Zero;
+	m_head[0].LogVersion = 0;
+	m_head[0].Version = 1;
+	m_head[0].LogLength = 0x100000;
+	m_head[0].LogOffset = page_ptr;
+	page_ptr += m_head[0].LogLength;
+
+	m_head[1] = m_head[0];
+	m_head[1].SequenceNumber = 2;
+
+	WriteHeader(m_head[0], 0x10000);
+	WriteHeader(m_head[1], 0x20000);
+
+	m_meta_offset = page_ptr;
+	m_meta_size = 0x100000;
+	m_meta_flags = REGI_FLAG_REQUIRED;
+	page_ptr += m_meta_size;
+	m_bat_offset = 0x300000;
+	m_bat_size = m_bat_entries_cnt * sizeof(uint64_t);
+	if (m_bat_size & 0xFFFFF)
+		m_bat_size = (m_bat_size + 0x100000) & 0xFFF00000;
+	m_bat_flags = REGI_FLAG_REQUIRED;
+	page_ptr += m_bat_size;
+
+	SetupRegionTable(m_regi[0]);
+	SetupRegionTable(m_regi[1]);
+
+	WriteRegionTable(m_regi[0], 0x30000);
+	WriteRegionTable(m_regi[1], 0x40000);
+
+	ImgResize(page_ptr);
+	
+	m_log_b.resize(m_head[0].LogLength);
+	m_meta_b.resize(m_meta_size);
+	m_bat_b.resize(m_bat_size);
+
+	ImgWrite(m_head[0].LogOffset, m_log_b.data(), m_log_b.size());
+	ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
+	ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_b.size());
+
+	Close();
+
+	return ENOTSUP;
 }
 
 int VhdxDevice::Open(const char* name, bool writable)
@@ -172,13 +261,20 @@ int VhdxDevice::Open(const char* name, bool writable)
 	ReadMetadata(m_meta_offset, m_meta_size);
 	ReadBAT(m_bat_offset, m_bat_size);
 
+	_fseeki64(m_file, 0, SEEK_END);
+	m_img_size = _ftelli64(m_file);
+
 	return 0;
 }
 
 void VhdxDevice::Close()
 {
-	if (m_file)
+	if (m_file) {
+		if (m_writable)
+			_fseeki64(m_file, m_img_size, SEEK_SET);
+
 		fclose(m_file);
+	}
 
 	m_file = nullptr;
 	m_writable = false;
@@ -359,6 +455,26 @@ int VhdxDevice::ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset)
 			printf("  META: ");
 		trace(" %" PRIX64 " %08X %08X\n", table.entries[n].FileOffset, table.entries[n].Length, table.entries[n].Flags);
 	}
+
+	return 0;
+}
+
+int VhdxDevice::SetupRegionTable(VHDX_REGION_TABLE& table)
+{
+	table.hdr.Signature = VHDX_SIG_REGI;
+	table.hdr.Checksum = 0;
+	table.hdr.EntryCount = 2;
+	table.hdr.Reserved = 0;
+
+	table.entries[0].Guid = GUID_BAT;
+	table.entries[0].FileOffset = m_bat_offset;
+	table.entries[0].Length = m_bat_size;
+	table.entries[0].Flags = REGI_FLAG_REQUIRED;
+
+	table.entries[1].Guid = GUID_Metadata;
+	table.entries[1].FileOffset = m_meta_offset;
+	table.entries[1].Length = m_meta_size;
+	table.entries[1].Flags = REGI_FLAG_REQUIRED;
 
 	return 0;
 }
@@ -605,8 +721,17 @@ int VhdxDevice::ImgWrite(uint64_t offset, const void* buffer, size_t size)
 	_fseeki64(m_file, offset, SEEK_SET);
 	nwritten = fwrite(buffer, 1, size, m_file);
 
-	if (nwritten != size)
+	if (nwritten != size) {
+		perror("Error writing data");
 		return errno;
+	}
+
+	return 0;
+}
+
+int VhdxDevice::ImgResize(uint64_t size)
+{
+	m_img_size = size;
 
 	return 0;
 }
