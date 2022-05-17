@@ -193,7 +193,11 @@ private:
 	int SetupRegionTable(VHDX_REGION_TABLE& table);
 	int WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset);
 	int ReadMetadata(uint64_t offset, uint32_t length);
+	void AddMetaEntry(uint32_t& off, VHDX_METADATA_TABLE_ENTRY& entry, const MS_GUID& guid, const void* data, size_t size, uint32_t flags);
+	int WriteMetadata();
 	int ReadBAT(uint64_t offset, uint32_t length);
+	int WriteBAT();
+	int UpdateBAT(int index, uint64_t entry);
 
 	int LogReplay();
 	int LogStart();

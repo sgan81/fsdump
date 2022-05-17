@@ -122,6 +122,8 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	m_sector_bitmap_blocks_count = (m_data_blocks_count + m_chunk_ratio - 1) / m_chunk_ratio;
 	m_bat_entries_cnt = m_data_blocks_count + (m_data_blocks_count - 1) / m_chunk_ratio;
 
+	ImgResize(page_ptr);
+
 	{
 		memset(m_cache, 0, sizeof(m_cache));
 		VHDX_FILE_IDENTIFIER* id = reinterpret_cast<VHDX_FILE_IDENTIFIER*>(m_cache);
@@ -174,12 +176,12 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	m_bat_b.resize(m_bat_size);
 
 	ImgWrite(m_head[0].LogOffset, m_log_b.data(), m_log_b.size());
-	ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
-	ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_b.size());
+	// ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
+	// ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_b.size());
+	WriteMetadata();
+	WriteBAT();
 
-	Close();
-
-	return ENOTSUP;
+	return 0;
 }
 
 int VhdxDevice::Open(const char* name, bool writable)
@@ -270,8 +272,10 @@ int VhdxDevice::Open(const char* name, bool writable)
 void VhdxDevice::Close()
 {
 	if (m_file) {
+		int err;
+
 		if (m_writable)
-			_fseeki64(m_file, m_img_size, SEEK_SET);
+			err = _fseeki64(m_file, m_img_size, SEEK_SET);
 
 		fclose(m_file);
 	}
@@ -348,7 +352,78 @@ int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 
 int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 {
-	return ENOTSUP;
+	if (!m_file)
+		return EINVAL;
+
+	const uint8_t* bdata = reinterpret_cast<const uint8_t*>(data);
+	const uint64_t mask = static_cast<uint64_t>(m_block_size) - 1;
+	uint64_t off_hi;
+	uint64_t bat_entry;
+	uint64_t bat_off;
+	uint64_t file_off;
+	VHDX_BAT_STATE st;
+	uint32_t off_lo;
+	uint32_t cur_blk_size;
+	bool alloc_block;
+	bool modify_entry;
+
+	offset += GetPartitionStart();
+
+	if ((offset + size) > m_disk_size)
+		return EINVAL;
+
+	while (size > 0) {
+		off_hi = offset & ~mask;
+		off_lo = offset & mask;
+		bat_off = off_hi / m_block_size;
+		bat_off = bat_off + (bat_off / m_chunk_ratio);
+		bat_entry = le64toh(m_bat_b[bat_off]);
+		st = static_cast<VHDX_BAT_STATE>(bat_entry & 7);
+		file_off = bat_entry & 0xFFFFFFFFFFF00000U;
+
+		switch (st) {
+		case PAYLOAD_BLOCK_NOT_PRESENT:
+		case PAYLOAD_BLOCK_UNDEFINED:
+		case PAYLOAD_BLOCK_ZERO:
+		case PAYLOAD_BLOCK_UNMAPPED:
+			modify_entry = true;
+			alloc_block = file_off == 0;
+			break;
+		case PAYLOAD_BLOCK_FULLY_PRESENT:
+			modify_entry = false;
+			alloc_block = false;
+			break;
+		case PAYLOAD_BLOCK_PARTIALLY_PRESENT:
+		default:
+			return EINVAL;
+			break;
+		}
+
+		if (modify_entry) {
+			if (alloc_block) {
+				file_off = m_img_size;
+				ImgResize(m_img_size + m_block_size);
+			}
+			st = PAYLOAD_BLOCK_FULLY_PRESENT;
+			bat_entry = file_off | st;
+			UpdateBAT(bat_off, bat_entry);
+		}
+
+		cur_blk_size = m_block_size - off_lo;
+		if (size < cur_blk_size)
+			cur_blk_size = size;
+
+		if (file_off == 0)
+			return EINVAL;
+		else
+			ImgWrite(file_off + off_lo, bdata, cur_blk_size);
+
+		offset += cur_blk_size;
+		size -= cur_blk_size;
+		bdata += cur_blk_size;
+	}
+
+	return 0;
 }
 
 uint64_t VhdxDevice::GetSize() const
@@ -411,7 +486,7 @@ int VhdxDevice::WriteHeader(const VHDX_HEADER& header, uint64_t offset)
 	h->LogLength = htole32(header.LogLength);
 	h->LogOffset = htole64(header.LogOffset);
 
-	h->Checksum = htole32(m_crc.GetDataCRC(m_cache, 0x10000, 0xFFFFFFFF, 0xFFFFFFFF));
+	h->Checksum = htole32(m_crc.GetDataCRC(m_cache, 0x1000, 0xFFFFFFFF, 0xFFFFFFFF));
 
 	return ImgWrite(offset, m_cache, 0x10000);
 }
@@ -481,6 +556,29 @@ int VhdxDevice::SetupRegionTable(VHDX_REGION_TABLE& table)
 
 int VhdxDevice::WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset)
 {
+	VHDX_REGION_TABLE* t = reinterpret_cast<VHDX_REGION_TABLE*>(m_cache);
+	uint32_t n;
+	uint32_t crc;
+
+	memset(m_cache, 0, sizeof(m_cache));
+
+	t->hdr.Signature = htole32(VHDX_SIG_REGI);
+	t->hdr.Checksum = 0;
+	t->hdr.EntryCount = htole32(table.hdr.EntryCount);
+	t->hdr.Reserved = 0;
+
+	for (n = 0; n < table.hdr.EntryCount; n++) {
+		t->entries[n].Guid = table.entries[n].Guid;
+		t->entries[n].FileOffset = htole64(table.entries[n].FileOffset);
+		t->entries[n].Length = htole32(table.entries[n].Length);
+		t->entries[n].Flags = htole32(table.entries[n].Flags);
+	}
+
+	crc = m_crc.GetDataCRC(m_cache, 0x10000, 0xFFFFFFFF, 0xFFFFFFFF);
+	t->hdr.Checksum = htole32(crc);
+
+	ImgWrite(offset, m_cache, 0x10000);
+
 	return 0;
 }
 
@@ -513,6 +611,9 @@ int VhdxDevice::ReadMetadata(uint64_t offset, uint32_t length)
 		vp = m_meta_b.data() + off;
 
 		trace("%08X %08X ", off, len);
+		trace("%c ", (e[n].Flags & 1) ? 'U' : '-');
+		trace("%c ", (e[n].Flags & 2) ? 'V' : '-');
+		trace("%c ", (e[n].Flags & 4) ? 'R' : '-');
 		trace_guid(e[n].ItemId, nullptr);
 		trace(" : ");
 
@@ -520,8 +621,8 @@ int VhdxDevice::ReadMetadata(uint64_t offset, uint32_t length)
 			const VHDX_FILE_PARAMETERS* p = reinterpret_cast<const VHDX_FILE_PARAMETERS*>(vp);
 			uint32_t flags = le32toh(p->Flags);
 			m_block_size = le32toh(p->BlockSize);
-			m_leave_alloc = (flags & 0x80000000) != 0;
-			m_has_parent = (flags & 0x40000000) != 0;
+			m_leave_alloc = (flags & 1) != 0;
+			m_has_parent = (flags & 2) != 0;
 			trace("File Parameters: BlockSize = %X, LeaveAlloc=%d, HasParent=%d\n", m_block_size, m_leave_alloc, m_has_parent);
 		}
 		else if (e[n].ItemId == GUID_VIRTUAL_DISK_SIZE) {
@@ -548,11 +649,65 @@ int VhdxDevice::ReadMetadata(uint64_t offset, uint32_t length)
 			trace("Parent Locator not supported.\n");
 		}
 		else {
-			trace("\n");
+			trace("Unknown GUID\n");
 		}
 	}
 
 	trace("\n");
+
+	return 0;
+}
+
+void VhdxDevice::AddMetaEntry(uint32_t& off, VHDX_METADATA_TABLE_ENTRY& entry, const MS_GUID& guid, const void* data, size_t size, uint32_t flags)
+{
+	memcpy(m_meta_b.data() + off, data, size);
+
+	entry.ItemId = guid;
+	entry.Offset = htole32(off);
+	entry.Length = htole32(size);
+	entry.Flags = htole32(flags);
+	entry.Reserved2 = 0;
+
+	off += size;
+}
+
+int VhdxDevice::WriteMetadata()
+{
+	// Block Size
+	// Virtual Disk Size
+	// Logical Sector Size
+	// Physical Sector Size
+	// Virtual Disk ID
+	VHDX_METADATA_TABLE_HEADER* h = reinterpret_cast<VHDX_METADATA_TABLE_HEADER*>(m_meta_b.data());
+	VHDX_METADATA_TABLE_ENTRY* e = reinterpret_cast<VHDX_METADATA_TABLE_ENTRY*>(h + 1);
+
+	VHDX_FILE_PARAMETERS file_params = {};
+	VHDX_VIRTUAL_DISK_SIZE virt_disk_size = {};
+	VHDX_LOGICAL_SECTOR_SIZE log_sect_size = {};
+	VHDX_PHYSICAL_SECTOR_SIZE phys_sect_size = {};
+	VHDX_VIRTUAL_DISK_ID virt_disk_id = {};
+	uint32_t off = 0x10000;
+
+	file_params.BlockSize = htole32(m_block_size);
+	file_params.Flags = htole32((m_leave_alloc ? 1 : 0) | (m_has_parent ? 2 : 0));
+	virt_disk_size.VirtualDiskSize = htole64(m_disk_size);
+	log_sect_size.LogicalSectorSize = htole32(m_sector_size_logical);
+	phys_sect_size.PhysicalSectorSize = htole32(m_sector_size_physical);
+	virt_disk_id.VirtualDiskId = m_virtual_disk_id;
+
+	h->Signature = htole64(VHDX_SIG_META);
+	h->Reserved = 0;
+	h->EntryCount = htole16(5);
+	memset(h->Reserved2, 0, sizeof(h->Reserved2));
+
+	AddMetaEntry(off, e[0], GUID_FILE_PARAMETERS, &file_params, sizeof(file_params), META_FLAGS_IS_REQUIRED);
+	AddMetaEntry(off, e[1], GUID_VIRTUAL_DISK_SIZE, &virt_disk_size, sizeof(virt_disk_size), META_FLAGS_IS_VIRTUAL_DISK | META_FLAGS_IS_REQUIRED);
+	AddMetaEntry(off, e[2], GUID_LOGICAL_SECTOR_SIZE, &log_sect_size, sizeof(log_sect_size), META_FLAGS_IS_VIRTUAL_DISK | META_FLAGS_IS_REQUIRED);
+	AddMetaEntry(off, e[3], GUID_PHYSICAL_SECTOR_SIZE, &phys_sect_size, sizeof(phys_sect_size), META_FLAGS_IS_VIRTUAL_DISK | META_FLAGS_IS_REQUIRED);
+	AddMetaEntry(off, e[4], GUID_VIRTUAL_DISK_ID, &virt_disk_id, sizeof(virt_disk_id), META_FLAGS_IS_VIRTUAL_DISK | META_FLAGS_IS_REQUIRED);
+
+	// TODO : Log this ...
+	ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
 
 	return 0;
 }
@@ -598,6 +753,32 @@ int VhdxDevice::ReadBAT(uint64_t offset, uint32_t length)
 		trace("\n");
 	}
 #endif
+
+	return 0;
+}
+
+int VhdxDevice::WriteBAT()
+{
+	// TODO Log ...
+	// TODO Write changes only ...
+
+	ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_size);
+
+	return 0;
+}
+
+int VhdxDevice::UpdateBAT(int index, uint64_t entry)
+{
+	uint32_t off;
+	const uint8_t* bat_data;
+
+	m_bat_b[index] = htole64(entry);
+
+	off = (index << 3) & ~0xFFF;
+	bat_data = reinterpret_cast<const uint8_t*>(m_bat_b.data());
+
+	// TODO Log ...
+	ImgWrite(m_bat_offset + off, bat_data + off, 0x1000);
 
 	return 0;
 }
@@ -731,7 +912,21 @@ int VhdxDevice::ImgWrite(uint64_t offset, const void* buffer, size_t size)
 
 int VhdxDevice::ImgResize(uint64_t size)
 {
+	uint64_t oldsize = m_img_size;
 	m_img_size = size;
+	trace("Resize to 0x%zX bytes.\n", size);
+
+	if (m_img_size > oldsize) {
+		size_t n;
+		size_t diff = size - oldsize;
+
+		memset(m_cache, 0, sizeof(m_cache));
+
+		_fseeki64(m_file, oldsize, SEEK_SET);
+		for (n = 0; n < diff; n += sizeof(m_cache)) {
+			fwrite(m_cache, 1, sizeof(m_cache), m_file);
+		}
+	}
 
 	return 0;
 }
