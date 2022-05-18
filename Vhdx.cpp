@@ -61,7 +61,7 @@ static void trace_guid(const MS_GUID& guid, const char *pfx)
 #define trace_guid(guid, pfx)
 #endif
 
-VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(), m_cache(), m_virtual_disk_id()
+VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(), m_cache(), m_leh(), m_virtual_disk_id()
 {
 	srand(time(NULL));
 
@@ -69,6 +69,12 @@ VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(
 	m_writable = false;
 
 	m_active_header = -1;
+	m_file_guid_changed = false;
+	m_data_guid_changed = false;
+
+	m_log_head = 0;
+	m_log_tail = 0;
+	m_log_seqno = 0xCAFEBABEFEEDFACE;
 
 	m_bat_offset = 0;
 	m_bat_size = 0;
@@ -122,7 +128,7 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	m_sector_bitmap_blocks_count = (m_data_blocks_count + m_chunk_ratio - 1) / m_chunk_ratio;
 	m_bat_entries_cnt = m_data_blocks_count + (m_data_blocks_count - 1) / m_chunk_ratio;
 
-	ImgResize(page_ptr);
+	ImgResize(0x200000);
 
 	{
 		memset(m_cache, 0, sizeof(m_cache));
@@ -148,6 +154,10 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 
 	m_head[1] = m_head[0];
 	m_head[1].SequenceNumber = 2;
+
+	m_data_guid_changed = true;
+	m_file_guid_changed = true;
+	m_active_header = 1;
 
 	WriteHeader(m_head[0], 0x10000);
 	WriteHeader(m_head[1], 0x20000);
@@ -201,6 +211,8 @@ int VhdxDevice::Open(const char* name, bool writable)
 	}
 
 	m_writable = writable;
+	m_file_guid_changed = false;
+	m_data_guid_changed = false;
 
 	{
 		const VHDX_FILE_IDENTIFIER* id = reinterpret_cast<const VHDX_FILE_IDENTIFIER*>(m_cache);
@@ -355,6 +367,9 @@ int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 	if (!m_file)
 		return EINVAL;
 
+	if (!m_writable)
+		return EROFS;
+
 	const uint8_t* bdata = reinterpret_cast<const uint8_t*>(data);
 	const uint64_t mask = static_cast<uint64_t>(m_block_size) - 1;
 	uint64_t off_hi;
@@ -371,6 +386,8 @@ int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 
 	if ((offset + size) > m_disk_size)
 		return EINVAL;
+
+	UpdateDataWriteGUID();
 
 	while (size > 0) {
 		off_hi = offset & ~mask;
@@ -438,7 +455,7 @@ int VhdxDevice::ReadHeader(VHDX_HEADER& header, uint64_t offset)
 	int err;
 	VHDX_HEADER* h;
 
-	err = ImgRead(offset, m_cache, 0x10000);
+	err = ImgRead(offset, m_cache, 0x1000);
 	if (err)
 		return err;
 
@@ -488,7 +505,22 @@ int VhdxDevice::WriteHeader(const VHDX_HEADER& header, uint64_t offset)
 
 	h->Checksum = htole32(m_crc.GetDataCRC(m_cache, 0x1000, 0xFFFFFFFF, 0xFFFFFFFF));
 
-	return ImgWrite(offset, m_cache, 0x10000);
+	return ImgWrite(offset, m_cache, 0x1000);
+}
+
+int VhdxDevice::UpdateHeader(const VHDX_HEADER& header)
+{
+	uint32_t off;
+	int err;
+
+	m_active_header ^= 1;
+	m_head[m_active_header] = header;
+
+	off = m_active_header ? 0x20000 : 0x10000;
+
+	err = WriteHeader(m_head[m_active_header], off);
+	fflush(m_file);
+	return err;
 }
 
 int VhdxDevice::ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset)
@@ -777,8 +809,14 @@ int VhdxDevice::UpdateBAT(int index, uint64_t entry)
 	off = (index << 3) & ~0xFFF;
 	bat_data = reinterpret_cast<const uint8_t*>(m_bat_b.data());
 
+	UpdateFileWriteGUID();
+
 	// TODO Log ...
+	LogStart();
+	LogWrite(m_bat_offset + off, bat_data + off);
+	LogCommit();
 	ImgWrite(m_bat_offset + off, bat_data + off, 0x1000);
+	LogComplete();
 
 	return 0;
 }
@@ -790,7 +828,7 @@ int VhdxDevice::LogReplay()
 	uint32_t signature;
 	uint32_t n;
 	uint32_t count;
-	size_t off;
+	uint32_t off;
 	uint8_t block[0x1000];
 	uint32_t crc;
 	uint32_t ccrc;
@@ -799,16 +837,14 @@ int VhdxDevice::LogReplay()
 	err = ImgRead(h.LogOffset, m_log_b.data(), m_log_b.size());
 	if (err) return err;
 
-	if (h.LogGuid == GUID_Zero)
-		return 0;
-	else if (!m_writable)
-		return EFAULT;
-
 	VHDX_LOG_ENTRY_HEADER* lh;
 
 	for (off = 0; off < m_log_b.size(); off += 0x1000) {
 		lh = reinterpret_cast<VHDX_LOG_ENTRY_HEADER*>(m_log_b.data() + off);
 		signature = le32toh(lh->Signature);
+
+		if (signature != 0)
+			trace("%08X: ", off);
 
 		if (signature == VHDX_SIG_LOGE) {
 			crc = le32toh(lh->Checksum);
@@ -826,6 +862,7 @@ int VhdxDevice::LogReplay()
 			const VHDX_LOG_DATA_DESCRIPTOR* desc = reinterpret_cast<const VHDX_LOG_DATA_DESCRIPTOR*>(lh + 1);
 			count = le32toh(lh->DescriptorCount);
 			for (n = 0; n < count; n++) {
+				trace("          ");
 				trace("desc ... %" PRIX64 " %" PRId64 "\n", desc[n].FileOffset, desc[n].SequenceNumber);
 			}
 		}
@@ -847,21 +884,126 @@ int VhdxDevice::LogReplay()
 		}
 	}
 
+	m_log_head = 0;
+	m_log_tail = 0;
+
+	if (h.LogGuid == GUID_Zero)
+		return 0;
+	else if (!m_writable)
+		return EFAULT;
+
+	// TODO real replay ...
+
 	return 0;
 }
 
 int VhdxDevice::LogStart()
 {
+	VHDX_HEADER h = CurrentHeader();
+
+	h.SequenceNumber++;
+	GenerateRandomGUID(h.LogGuid);
+	UpdateHeader(h);
+
+	m_log_head = (m_log_head + 0x1000) & (h.LogLength - 1);
+	m_leh.Signature = VHDX_SIG_LOGE;
+	m_leh.Checksum = 0;
+	m_leh.EntryLength = 0x1000;
+	m_leh.Tail = m_log_tail;
+	m_leh.SequenceNumber = m_log_seqno;
+	m_leh.DescriptorCount = 0;
+	m_leh.Reserved = 0;
+	m_leh.LogGuid = h.LogGuid;
+	m_leh.FlushedFileOffset = m_img_size; // Hmmm ...
+	m_leh.LastFileOffset = m_img_size; // Hmmm ...
+
 	return 0;
 }
 
-int VhdxDevice::LogWrite(uint64_t offset, void* block_4k)
+int VhdxDevice::LogWrite(uint64_t offset, const void* block_4k)
 {
+	VHDX_LOG_DATA_DESCRIPTOR* d = reinterpret_cast<VHDX_LOG_DATA_DESCRIPTOR*>(m_log_b.data() + m_leh.Tail + sizeof(VHDX_LOG_ENTRY_HEADER) + 32 * m_leh.DescriptorCount);
+	VHDX_LOG_DATA_SECTOR* s = reinterpret_cast<VHDX_LOG_DATA_SECTOR*>(m_log_b.data() + m_log_head);
+	const VHDX_LOG_DATA_SECTOR* b = reinterpret_cast<const VHDX_LOG_DATA_SECTOR*>(block_4k);
+
+	d->DataSignature = htole32(VHDX_SIG_DESC);
+	d->TrailingBytes = b->SequenceLow;
+	d->LeadingBytes[0] = b->DataSignature;
+	d->LeadingBytes[1] = b->SequenceHigh;
+	d->FileOffset = htole64(offset);
+	d->SequenceNumber = htole64(m_log_seqno);
+
+	s->DataSignature = htole32(VHDX_SIG_DATA);
+	s->SequenceHigh = htole32(m_log_seqno >> 32);
+	memcpy(s->Data, b->Data, sizeof(s->Data));
+	s->SequenceLow = htole32(m_log_seqno & 0xFFFFFFFF);
+
+	m_log_head += 0x1000;
+	m_leh.DescriptorCount++;
+	m_leh.EntryLength += 0x1000;
+
+	return 0;
+}
+
+int VhdxDevice::LogWriteZero(uint64_t offset, uint64_t length)
+{
+	VHDX_LOG_ZERO_DESCRIPTOR* z = reinterpret_cast<VHDX_LOG_ZERO_DESCRIPTOR*>(m_log_b.data() + m_leh.Tail + sizeof(VHDX_LOG_ENTRY_HEADER) + 32 * m_leh.DescriptorCount);
+
+	z->ZeroSignature = htole32(VHDX_SIG_ZERO);
+	z->Reserved = 0;
+	z->ZeroLength = htole64(length);
+	z->FileOffset = htole64(offset);
+	z->SequenceNumber = htole64(m_leh.SequenceNumber);
+
+	m_leh.DescriptorCount++;
+
 	return 0;
 }
 
 int VhdxDevice::LogCommit()
 {
+	const VHDX_HEADER& v = CurrentHeader();
+	VHDX_LOG_ENTRY_HEADER* h = reinterpret_cast<VHDX_LOG_ENTRY_HEADER*>(m_log_b.data() + m_leh.Tail);
+	uint32_t off;
+	uint32_t mask = v.LogLength - 1;
+
+	h->Signature = htole32(m_leh.Signature);
+	h->Checksum = 0;
+	h->EntryLength = htole32(m_leh.EntryLength);
+	h->Tail = htole32(m_leh.Tail);
+	h->SequenceNumber = htole64(m_leh.SequenceNumber);
+	h->DescriptorCount = htole32(m_leh.DescriptorCount);
+	h->Reserved = 0;
+	h->LogGuid = m_leh.LogGuid;
+	h->FlushedFileOffset = htole64(m_leh.FlushedFileOffset);
+	h->LastFileOffset = htole64(m_leh.LastFileOffset);
+
+	m_crc.SetCRC(0xFFFFFFFF);
+	for (off = m_log_tail; off != m_log_head; off = (off + 0x1000) & mask)
+		m_crc.Calc(m_log_b.data() + off, 0x1000);
+	h->Checksum = htole32(m_crc.GetCRC() ^ 0xFFFFFFFF);
+
+	for (off = m_log_tail; off != m_log_head; off = (off + 0x1000) & mask)
+		ImgWrite(v.LogOffset + off, m_log_b.data() + off, 0x1000);
+	fflush(m_file);
+
+	m_log_seqno++;
+
+	return 0;
+}
+
+int VhdxDevice::LogComplete()
+{
+	VHDX_HEADER h = CurrentHeader();
+
+	m_log_tail = m_log_head;
+
+	h.SequenceNumber++;
+	h.LogGuid = GUID_Zero;
+	UpdateHeader(h);
+	h.SequenceNumber++;
+	UpdateHeader(h);
+
 	return 0;
 }
 
@@ -871,6 +1013,36 @@ void VhdxDevice::GenerateRandomGUID(MS_GUID& guid)
 		guid.d[n] = rand();
 	guid.d[7] = (guid.d[7] & 0x0F) | 0x40;
 	guid.d[8] = (guid.d[8] & 0x3F) | 0x80;
+}
+
+void VhdxDevice::UpdateFileWriteGUID()
+{
+	if (m_file_guid_changed)
+		return;
+
+	VHDX_HEADER h = CurrentHeader();
+	h.SequenceNumber++;
+	GenerateRandomGUID(h.FileWriteGuid);
+	UpdateHeader(h);
+	h.SequenceNumber++;
+	UpdateHeader(h);
+
+	m_file_guid_changed = true;
+}
+
+void VhdxDevice::UpdateDataWriteGUID()
+{
+	if (m_data_guid_changed)
+		return;
+
+	VHDX_HEADER h = CurrentHeader();
+	h.SequenceNumber++;
+	GenerateRandomGUID(h.DataWriteGuid);
+	UpdateHeader(h);
+	h.SequenceNumber++;
+	UpdateHeader(h);
+
+	m_data_guid_changed = true;
 }
 
 int VhdxDevice::ImgRead(uint64_t offset, void* buffer, size_t size)
@@ -898,6 +1070,10 @@ int VhdxDevice::ImgWrite(uint64_t offset, const void* buffer, size_t size)
 
 	if (!m_writable)
 		return EACCES;
+
+	if ((offset + size) > m_img_size)
+		// TODO Should not happen when logging ...
+		m_img_size = offset + size;
 
 	_fseeki64(m_file, offset, SEEK_SET);
 	nwritten = fwrite(buffer, 1, size, m_file);

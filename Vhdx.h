@@ -189,6 +189,8 @@ public:
 private:
 	int ReadHeader(VHDX_HEADER& header, uint64_t offset);
 	int WriteHeader(const VHDX_HEADER& header, uint64_t offset);
+	const VHDX_HEADER& CurrentHeader() const { return m_head[m_active_header]; }
+	int UpdateHeader(const VHDX_HEADER& header);
 	int ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset);
 	int SetupRegionTable(VHDX_REGION_TABLE& table);
 	int WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset);
@@ -201,10 +203,14 @@ private:
 
 	int LogReplay();
 	int LogStart();
-	int LogWrite(uint64_t offset, void* block_4k);
+	int LogWrite(uint64_t offset, const void* block_4k);
+	int LogWriteZero(uint64_t offset, uint64_t length);
 	int LogCommit();
+	int LogComplete();
 
 	void GenerateRandomGUID(MS_GUID& guid);
+	void UpdateFileWriteGUID();
+	void UpdateDataWriteGUID();
 
 	int ImgRead(uint64_t offset, void* buffer, size_t size);
 	int ImgWrite(uint64_t offset, const void* buffer, size_t size);
@@ -223,12 +229,19 @@ private:
 	Crc32 m_crc;
 	FILE* m_file;
 	bool m_writable;
-	int m_active_header;
+	int8_t m_active_header;
+	bool m_file_guid_changed;
+	bool m_data_guid_changed;
 
 	uint8_t m_cache[0x10000];
 	std::vector<uint8_t> m_log_b;
 	std::vector<uint64_t> m_bat_b;
 	std::vector<uint8_t> m_meta_b;
+
+	uint32_t m_log_head;
+	uint32_t m_log_tail;
+	uint64_t m_log_seqno;
+	VHDX_LOG_ENTRY_HEADER m_leh;
 
 	uint64_t m_bat_offset;
 	uint32_t m_bat_size;
