@@ -18,13 +18,14 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #ifdef _WIN32
-
-#include "Device.h"
-
 // #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <tchar.h>
+#endif
 
 class ImageFile
 {
@@ -34,7 +35,13 @@ public:
 
 	int Open(const char* name, bool write);
 	void Close();
-	bool IsOpen() const { return m_handle != INVALID_HANDLE_VALUE; }
+	bool IsOpen() const {
+#ifdef _WIN32
+		return m_handle != INVALID_HANDLE_VALUE;
+#else
+		return m_fd != -1;
+#endif
+	}
 
 	int Read(void* buffer, size_t size, uint64_t offset);
 	int Write(const void* buffer, size_t size, uint64_t offset);
@@ -43,8 +50,10 @@ public:
 	uint64_t GetSize() const { return m_size; }
 
 private:
+#ifdef _WIN32
 	HANDLE m_handle;
+#else
+	int m_fd;
+#endif
 	uint64_t m_size;
 };
-
-#endif

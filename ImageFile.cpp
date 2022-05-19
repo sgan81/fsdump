@@ -113,4 +113,98 @@ int ImageFile::Flush()
 	return 0;
 }
 
+#else
+
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+ImageFile::ImageFile()
+{
+	m_fd = -1;
+	m_size = 0;
+}
+
+ImageFile::~ImageFile()
+{
+	Close();
+}
+
+int ImageFile::Open(const char* name, bool write)
+{
+	struct stat st;
+
+	m_fd = open(name, write ? (O_RDWR | O_CREAT) : O_RDONLY, 0644);
+	if (m_fd == -1) return errno;
+
+	fstat(m_fd, &st);
+
+	m_size = st.st_size;
+
+	return 0;
+}
+
+void ImageFile::Close()
+{
+	if (m_fd != -1)
+		close(m_fd);
+	m_fd = -1;
+	m_size = 0;
+}
+
+int ImageFile::Read(void* buffer, size_t size, uint64_t offset)
+{
+	ssize_t nr;
+	uint8_t *bbuffer = reinterpret_cast<uint8_t*>(buffer);
+
+	while (size > 0) {
+		nr = pread(m_fd, bbuffer, size, offset);
+		if (nr <= 0)
+			return errno;
+		size -= nr;
+		bbuffer += nr;
+		offset += nr;
+	}
+
+	return 0;
+}
+
+int ImageFile::Write(const void* buffer, size_t size, uint64_t offset)
+{
+	ssize_t nw;
+	const uint8_t *bbuffer = reinterpret_cast<const uint8_t*>(buffer);
+
+	if ((offset + size) > m_size)
+		m_size = offset + size;
+
+	while (size > 0) {
+		nw = write(m_fd, bbuffer, size);
+		if (nw <= 0)
+			return errno;
+		size -= nw;
+		bbuffer += nw;
+		offset += nw;
+	}
+
+	return 0;
+}
+
+int ImageFile::Resize(uint64_t size)
+{
+	if (ftruncate(m_fd, size) < 0)
+		return errno;
+
+	m_size = size;
+
+	return 0;
+}
+
+int ImageFile::Flush()
+{
+	if (fdatasync(m_fd) < 0)
+		return errno;
+	return 0;
+}
+
 #endif

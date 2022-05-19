@@ -74,7 +74,16 @@ bool DeviceLinux::Open(const char* name)
 #ifdef __linux__
 	} else if (S_ISBLK(st.st_mode)) {
 		// Hmmm ...
+		uint32_t bslog;
+		uint32_t bsphys;
+
 		ioctl(m_device, BLKGETSIZE64, &m_size);
+		ioctl(m_device, BLKSSZGET, &bslog);
+		ioctl(m_device, BLKPBSZGET, &bsphys);
+
+		printf("Device Size: %" PRIu64 "\n", m_size);
+		printf("Logical Sector Size:  %d\n", bslog);
+		printf("Physical Sector Size: %d\n", bsphys);
 #endif
 #ifdef __APPLE__
 	} else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {

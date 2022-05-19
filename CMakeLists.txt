@@ -18,6 +18,8 @@ DeviceLinux.h
 FileSystem.h
 GptPartitionMap.cpp
 GptPartitionMap.h
+ImageFile.cpp
+ImageFile.h
 main.cpp
 MasterBootRecord.h
 Ntfs.cpp

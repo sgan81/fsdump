@@ -2,6 +2,7 @@
 #include <ctime>
 #include <cstring>
 #include <cinttypes>
+#include <cerrno>
 
 #include <endian.h>
 
@@ -61,7 +62,7 @@ static void trace_guid(const MS_GUID& guid, const char *pfx)
 #define trace_guid(guid, pfx)
 #endif
 
-VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(), m_cache(), m_leh(), m_virtual_disk_id()
+VhdxDevice::VhdxDevice() : m_ident(), m_head(), m_regi(), m_crc(true, 0x1EDC6F41), m_cache(), m_leh(), m_virtual_disk_id()
 {
 	srand(time(NULL));
 
@@ -108,7 +109,7 @@ VhdxDevice::~VhdxDevice()
 
 int VhdxDevice::Create(const char* name, uint64_t size)
 {
-	errno_t err;
+	int err;
 	int n;
 	static const char16_t* creator = u"FsDump 0.1";
 	uint64_t page_ptr = 0x100000;
@@ -184,7 +185,7 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	WriteRegionTable(m_regi[1], 0x40000);
 
 	m_file.Resize(page_ptr);
-	
+
 	m_log_b.resize(m_head[0].LogLength);
 	m_meta_b.resize(m_meta_size);
 	m_bat_b.resize(m_bat_size);
@@ -200,7 +201,7 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 
 int VhdxDevice::Open(const char* name, bool writable)
 {
-	errno_t err;
+	int err;
 	size_t n;
 
 	Close();
@@ -323,7 +324,7 @@ int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 	uint64_t bat_entry;
 	uint64_t bat_off;
 	uint64_t file_off;
-	VHDX_BAT_STATE st;
+	// VHDX_BAT_STATE st;
 	uint32_t off_lo;
 	uint32_t cur_blk_size;
 
@@ -338,7 +339,7 @@ int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 		bat_off = off_hi / m_block_size;
 		bat_off = bat_off + (bat_off / m_chunk_ratio);
 		bat_entry = le64toh(m_bat_b[bat_off]);
-		st = static_cast<VHDX_BAT_STATE>(bat_entry & 7);
+		// st = static_cast<VHDX_BAT_STATE>(bat_entry & 7);
 		file_off = bat_entry & 0xFFFFFFFFFFF00000U;
 		cur_blk_size = m_block_size - off_lo;
 		if (size < cur_blk_size)
@@ -762,14 +763,14 @@ int VhdxDevice::ReadBAT(uint64_t offset, uint32_t length)
 	trace("Sector Bitmap Blocks Count: %" PRId64 "\n", m_sector_bitmap_blocks_count);
 	trace("BAT Entries Count: %" PRId64 "\n", m_bat_entries_cnt);
 
-#if 1
+#if 0
 	uint64_t FileOffsetMB;
 	VHDX_BAT_STATE st;
 	for (n = 0; n < m_bat_entries_cnt; n++) {
 		e = le64toh(m_bat_b[n]);
 		st = static_cast<VHDX_BAT_STATE>(e & 7);
 		FileOffsetMB = (e & 0xFFFFFFFFFFF00000U);
-		trace("%08" PRIX64 " : % d : % 016" PRIX64 " ", n, st, FileOffsetMB);
+		trace("%08" PRIX64 " : % d : %016" PRIX64 " ", n, st, FileOffsetMB);
 		switch (st) {
 		case PAYLOAD_BLOCK_NOT_PRESENT: trace("NOT_PRESENT"); break;
 		case PAYLOAD_BLOCK_UNDEFINED: trace("UNDEFINED"); break;
@@ -825,7 +826,7 @@ int VhdxDevice::LogReplay()
 	uint32_t n;
 	uint32_t count;
 	uint32_t off;
-	uint8_t block[0x1000];
+	// uint8_t block[0x1000];
 	uint32_t crc;
 	uint32_t ccrc;
 
