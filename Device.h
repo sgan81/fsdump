@@ -26,6 +26,7 @@ protected:
 	Device()
 	{
 		m_sector_size = 0x200;
+		m_sector_size_phys = 0x200;
 		m_part_start = 0;
 		m_part_size = 0;
 	}
@@ -39,6 +40,8 @@ public:
 
 	unsigned int GetSectorSize() const { return m_sector_size; }
 	void SetSectorSize(unsigned int size) { m_sector_size = size; }
+	unsigned int GetSectorSizePhysical() const { return m_sector_size_phys; }
+	void SetSectorSizePhysical(unsigned int size) { m_sector_size_phys = size; }
 
 	void SetPartitionLimits(uint64_t start, uint64_t size)
 	{
@@ -70,6 +73,7 @@ public:
 
 private:
 	unsigned int m_sector_size;
+	unsigned int m_sector_size_phys;
 	uint64_t m_part_start;
 	uint64_t m_part_size;
 };

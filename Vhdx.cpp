@@ -65,7 +65,6 @@ VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(
 {
 	srand(time(NULL));
 
-	m_file = nullptr;
 	m_writable = false;
 
 	m_active_header = -1;
@@ -74,7 +73,7 @@ VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(
 
 	m_log_head = 0;
 	m_log_tail = 0;
-	m_log_seqno = 0xCAFEBABEFEEDFACE;
+	m_log_seqno = 0;
 
 	m_bat_offset = 0;
 	m_bat_size = 0;
@@ -87,15 +86,19 @@ VhdxDevice::VhdxDevice() : m_crc(true, 0x1EDC6F41), m_ident(), m_head(), m_regi(
 	m_leave_alloc = false;
 	m_has_parent = false;
 	m_disk_size = 0;
-	m_sector_size_logical = 0;
-	m_sector_size_physical = 0;
+	m_sector_size_logical = 0x200;
+	m_sector_size_physical = 0x1000;
 
 	m_chunk_ratio = 0;
 	m_data_blocks_count = 0;
 	m_sector_bitmap_blocks_count = 0;
 	m_bat_entries_cnt = 0;
 
-	m_img_size = 0;
+	SetSectorSize(0x200);
+	SetSectorSizePhysical(0x1000);
+
+	for (int n = 0; n < 8; n++)
+		m_log_seqno = m_log_seqno << 8 | (rand() & 0xFF);
 }
 
 VhdxDevice::~VhdxDevice()
@@ -112,14 +115,15 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 
 	Close();
 
-	err = fopen_s(&m_file, name, "wb");
+	err = m_file.Open(name, true);
 	if (err) return err;
+	m_file.Resize(0);
 
 	m_writable = true;
 
 	m_disk_size = size;
-	m_sector_size_logical = 512; // Assuming ...
-	m_sector_size_physical = 4096; // Assuming as well ...
+	m_sector_size_logical = GetSectorSize(); // Assuming ...
+	m_sector_size_physical = GetSectorSizePhysical(); // Assuming as well ...
 	// TODO get these from the device and pass as parameters ...
 	m_block_size = 0x2000000;
 
@@ -128,7 +132,7 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	m_sector_bitmap_blocks_count = (m_data_blocks_count + m_chunk_ratio - 1) / m_chunk_ratio;
 	m_bat_entries_cnt = m_data_blocks_count + (m_data_blocks_count - 1) / m_chunk_ratio;
 
-	ImgResize(0x200000);
+	m_file.Resize(0x200000);
 
 	{
 		memset(m_cache, 0, sizeof(m_cache));
@@ -137,7 +141,7 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 		for (n = 0; creator[n] != 0; n++)
 			id->Creator[n] = htole16(creator[n]);
 		id->Creator[n] = 0;
-		ImgWrite(0, m_cache, 0x10000);
+		m_file.Write(m_cache, 0x10000, 0);
 	}
 
 	m_head[0].Signature = VHDX_SIG_HEAD;
@@ -179,13 +183,13 @@ int VhdxDevice::Create(const char* name, uint64_t size)
 	WriteRegionTable(m_regi[0], 0x30000);
 	WriteRegionTable(m_regi[1], 0x40000);
 
-	ImgResize(page_ptr);
+	m_file.Resize(page_ptr);
 	
 	m_log_b.resize(m_head[0].LogLength);
 	m_meta_b.resize(m_meta_size);
 	m_bat_b.resize(m_bat_size);
 
-	ImgWrite(m_head[0].LogOffset, m_log_b.data(), m_log_b.size());
+	m_file.Write(m_log_b.data(), m_log_b.size(), m_head[0].LogOffset);
 	// ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
 	// ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_b.size());
 	WriteMetadata();
@@ -201,10 +205,10 @@ int VhdxDevice::Open(const char* name, bool writable)
 
 	Close();
 
-	err = fopen_s(&m_file, name, writable ? "wb" : "rb");
+	err = m_file.Open(name, writable);
 	if (err) return err;
 
-	err = ImgRead(0, m_cache, 0x10000);
+	err = m_file.Read(m_cache, 0x10000, 0);
 	if (err) {
 		Close();
 		return err;
@@ -275,24 +279,15 @@ int VhdxDevice::Open(const char* name, bool writable)
 	ReadMetadata(m_meta_offset, m_meta_size);
 	ReadBAT(m_bat_offset, m_bat_size);
 
-	_fseeki64(m_file, 0, SEEK_END);
-	m_img_size = _ftelli64(m_file);
+	SetSectorSize(m_sector_size_logical);
+	SetSectorSizePhysical(m_sector_size_physical);
 
 	return 0;
 }
 
 void VhdxDevice::Close()
 {
-	if (m_file) {
-		int err;
-
-		if (m_writable)
-			err = _fseeki64(m_file, m_img_size, SEEK_SET);
-
-		fclose(m_file);
-	}
-
-	m_file = nullptr;
+	m_file.Close();
 	m_writable = false;
 
 	m_active_header = -1;
@@ -319,7 +314,7 @@ void VhdxDevice::Close()
 
 int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 {
-	if (!m_file)
+	if (!m_file.IsOpen())
 		return EINVAL;
 
 	uint8_t* bdata = reinterpret_cast<uint8_t*>(data);
@@ -352,7 +347,7 @@ int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 		if (file_off == 0)
 			memset(bdata, 0, cur_blk_size);
 		else
-			ImgRead(file_off + off_lo, bdata, cur_blk_size);
+			m_file.Read(bdata, cur_blk_size, file_off + off_lo);
 
 		offset += cur_blk_size;
 		size -= cur_blk_size;
@@ -364,7 +359,7 @@ int VhdxDevice::Read(void* data, size_t size, uint64_t offset)
 
 int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 {
-	if (!m_file)
+	if (!m_file.IsOpen())
 		return EINVAL;
 
 	if (!m_writable)
@@ -418,8 +413,9 @@ int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 
 		if (modify_entry) {
 			if (alloc_block) {
-				file_off = m_img_size;
-				ImgResize(m_img_size + m_block_size);
+				file_off = m_file.GetSize();
+				m_file.Resize(file_off + m_block_size);
+				printf("File Resize to %" PRIX64 "\n", file_off + m_block_size);
 			}
 			st = PAYLOAD_BLOCK_FULLY_PRESENT;
 			bat_entry = file_off | st;
@@ -433,7 +429,7 @@ int VhdxDevice::Write(const void* data, size_t size, uint64_t offset)
 		if (file_off == 0)
 			return EINVAL;
 		else
-			ImgWrite(file_off + off_lo, bdata, cur_blk_size);
+			m_file.Write(bdata, cur_blk_size, file_off + off_lo);
 
 		offset += cur_blk_size;
 		size -= cur_blk_size;
@@ -455,7 +451,7 @@ int VhdxDevice::ReadHeader(VHDX_HEADER& header, uint64_t offset)
 	int err;
 	VHDX_HEADER* h;
 
-	err = ImgRead(offset, m_cache, 0x1000);
+	err = m_file.Read(m_cache, 0x1000, offset);
 	if (err)
 		return err;
 
@@ -505,7 +501,7 @@ int VhdxDevice::WriteHeader(const VHDX_HEADER& header, uint64_t offset)
 
 	h->Checksum = htole32(m_crc.GetDataCRC(m_cache, 0x1000, 0xFFFFFFFF, 0xFFFFFFFF));
 
-	return ImgWrite(offset, m_cache, 0x1000);
+	return m_file.Write(m_cache, 0x1000, offset);
 }
 
 int VhdxDevice::UpdateHeader(const VHDX_HEADER& header)
@@ -519,7 +515,7 @@ int VhdxDevice::UpdateHeader(const VHDX_HEADER& header)
 	off = m_active_header ? 0x20000 : 0x10000;
 
 	err = WriteHeader(m_head[m_active_header], off);
-	fflush(m_file);
+	m_file.Flush();
 	return err;
 }
 
@@ -531,7 +527,7 @@ int VhdxDevice::ReadRegionTable(VHDX_REGION_TABLE& table, uint64_t offset)
 	uint32_t ccrc;
 	VHDX_REGION_TABLE* t = reinterpret_cast<VHDX_REGION_TABLE*>(m_cache);
 
-	err = ImgRead(offset, m_cache, 0x10000);
+	err = m_file.Read(m_cache, 0x10000, offset);
 	if (err)
 		return err;
 	if (le32toh(t->hdr.Signature) != VHDX_SIG_REGI)
@@ -609,7 +605,7 @@ int VhdxDevice::WriteRegionTable(const VHDX_REGION_TABLE& table, uint64_t offset
 	crc = m_crc.GetDataCRC(m_cache, 0x10000, 0xFFFFFFFF, 0xFFFFFFFF);
 	t->hdr.Checksum = htole32(crc);
 
-	ImgWrite(offset, m_cache, 0x10000);
+	m_file.Write(m_cache, 0x10000, offset);
 
 	return 0;
 }
@@ -624,7 +620,7 @@ int VhdxDevice::ReadMetadata(uint64_t offset, uint32_t length)
 	void* vp;
 
 	m_meta_b.resize(length);
-	err = ImgRead(offset, m_meta_b.data(), length);
+	err = m_file.Read(m_meta_b.data(), length, offset);
 	if (err)
 		return err;
 
@@ -739,7 +735,7 @@ int VhdxDevice::WriteMetadata()
 	AddMetaEntry(off, e[4], GUID_VIRTUAL_DISK_ID, &virt_disk_id, sizeof(virt_disk_id), META_FLAGS_IS_VIRTUAL_DISK | META_FLAGS_IS_REQUIRED);
 
 	// TODO : Log this ...
-	ImgWrite(m_meta_offset, m_meta_b.data(), m_meta_b.size());
+	m_file.Write(m_meta_b.data(), m_meta_b.size(), m_meta_offset);
 
 	return 0;
 }
@@ -751,7 +747,7 @@ int VhdxDevice::ReadBAT(uint64_t offset, uint32_t length)
 	size_t n;
 
 	m_bat_b.resize(length / sizeof(uint64_t));
-	err = ImgRead(offset, m_bat_b.data(), length);
+	err = m_file.Read(m_bat_b.data(), length, offset);
 	if (err)
 		return err;
 
@@ -794,7 +790,7 @@ int VhdxDevice::WriteBAT()
 	// TODO Log ...
 	// TODO Write changes only ...
 
-	ImgWrite(m_bat_offset, m_bat_b.data(), m_bat_size);
+	m_file.Write(m_bat_b.data(), m_bat_size, m_bat_offset);
 
 	return 0;
 }
@@ -811,12 +807,12 @@ int VhdxDevice::UpdateBAT(int index, uint64_t entry)
 
 	UpdateFileWriteGUID();
 
-	// TODO Log ...
-	LogStart();
-	LogWrite(m_bat_offset + off, bat_data + off);
-	LogCommit();
-	ImgWrite(m_bat_offset + off, bat_data + off, 0x1000);
-	LogComplete();
+	// TODO Log ... but it's slow ... and it also works without ...
+	// LogStart();
+	// LogWrite(m_bat_offset + off, bat_data + off);
+	// LogCommit();
+	m_file.Write(bat_data + off, 0x1000, m_bat_offset + off);
+	// LogComplete();
 
 	return 0;
 }
@@ -834,7 +830,7 @@ int VhdxDevice::LogReplay()
 	uint32_t ccrc;
 
 	m_log_b.resize(h.LogLength);
-	err = ImgRead(h.LogOffset, m_log_b.data(), m_log_b.size());
+	err = m_file.Read(m_log_b.data(), m_log_b.size(), h.LogOffset);
 	if (err) return err;
 
 	VHDX_LOG_ENTRY_HEADER* lh;
@@ -914,8 +910,8 @@ int VhdxDevice::LogStart()
 	m_leh.DescriptorCount = 0;
 	m_leh.Reserved = 0;
 	m_leh.LogGuid = h.LogGuid;
-	m_leh.FlushedFileOffset = m_img_size; // Hmmm ...
-	m_leh.LastFileOffset = m_img_size; // Hmmm ...
+	m_leh.FlushedFileOffset = m_file.GetSize(); // Hmmm ...
+	m_leh.LastFileOffset = m_file.GetSize(); // Hmmm ...
 
 	return 0;
 }
@@ -938,7 +934,7 @@ int VhdxDevice::LogWrite(uint64_t offset, const void* block_4k)
 	memcpy(s->Data, b->Data, sizeof(s->Data));
 	s->SequenceLow = htole32(m_log_seqno & 0xFFFFFFFF);
 
-	m_log_head += 0x1000;
+	m_log_head = (m_log_head + 0x1000) & (CurrentHeader().LogLength - 1);
 	m_leh.DescriptorCount++;
 	m_leh.EntryLength += 0x1000;
 
@@ -984,8 +980,8 @@ int VhdxDevice::LogCommit()
 	h->Checksum = htole32(m_crc.GetCRC() ^ 0xFFFFFFFF);
 
 	for (off = m_log_tail; off != m_log_head; off = (off + 0x1000) & mask)
-		ImgWrite(v.LogOffset + off, m_log_b.data() + off, 0x1000);
-	fflush(m_file);
+		m_file.Write(m_log_b.data() + off, 0x1000, v.LogOffset + off);
+	m_file.Flush();
 
 	m_log_seqno++;
 
@@ -1043,66 +1039,4 @@ void VhdxDevice::UpdateDataWriteGUID()
 	UpdateHeader(h);
 
 	m_data_guid_changed = true;
-}
-
-int VhdxDevice::ImgRead(uint64_t offset, void* buffer, size_t size)
-{
-	size_t nread;
-
-	if (m_file == nullptr)
-		return EINVAL;
-
-	_fseeki64(m_file, offset, SEEK_SET);
-	nread = fread(buffer, 1, size, m_file);
-
-	if (nread != size)
-		return errno;
-
-	return 0;
-}
-
-int VhdxDevice::ImgWrite(uint64_t offset, const void* buffer, size_t size)
-{
-	size_t nwritten;
-
-	if (m_file == nullptr)
-		return EINVAL;
-
-	if (!m_writable)
-		return EACCES;
-
-	if ((offset + size) > m_img_size)
-		// TODO Should not happen when logging ...
-		m_img_size = offset + size;
-
-	_fseeki64(m_file, offset, SEEK_SET);
-	nwritten = fwrite(buffer, 1, size, m_file);
-
-	if (nwritten != size) {
-		perror("Error writing data");
-		return errno;
-	}
-
-	return 0;
-}
-
-int VhdxDevice::ImgResize(uint64_t size)
-{
-	uint64_t oldsize = m_img_size;
-	m_img_size = size;
-	trace("Resize to 0x%zX bytes.\n", size);
-
-	if (m_img_size > oldsize) {
-		size_t n;
-		size_t diff = size - oldsize;
-
-		memset(m_cache, 0, sizeof(m_cache));
-
-		_fseeki64(m_file, oldsize, SEEK_SET);
-		for (n = 0; n < diff; n += sizeof(m_cache)) {
-			fwrite(m_cache, 1, sizeof(m_cache), m_file);
-		}
-	}
-
-	return 0;
 }

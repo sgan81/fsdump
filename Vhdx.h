@@ -1,3 +1,21 @@
+/*
+	This file is part of fsdump, a tool for dumping drives into image files.
+	Copyright (C) 2022 Simon Gander.
+
+	FSDump is free software: you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation, either version 2 of the License, or
+	(at your option) any later version.
+
+	FSDump is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with fsdump.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #pragma once
 
 #include <cstdint>
@@ -7,6 +25,7 @@
 
 #include "Device.h"
 #include "Crc32.h"
+#include "ImageFile.h"
 
 struct MS_GUID {
 	bool operator==(const MS_GUID& o) const
@@ -212,10 +231,6 @@ private:
 	void UpdateFileWriteGUID();
 	void UpdateDataWriteGUID();
 
-	int ImgRead(uint64_t offset, void* buffer, size_t size);
-	int ImgWrite(uint64_t offset, const void* buffer, size_t size);
-	int ImgResize(uint64_t size);
-
 	// Layout:
 	// File identifier
 	// Header 1, 2
@@ -227,7 +242,7 @@ private:
 	VHDX_REGION_TABLE m_regi[2];
 
 	Crc32 m_crc;
-	FILE* m_file;
+	ImageFile m_file;
 	bool m_writable;
 	int8_t m_active_header;
 	bool m_file_guid_changed;
@@ -262,7 +277,4 @@ private:
 	uint64_t m_data_blocks_count;
 	uint64_t m_sector_bitmap_blocks_count;
 	uint64_t m_bat_entries_cnt;
-
-	// Writing ...
-	uint64_t m_img_size;
 };

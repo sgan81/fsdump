@@ -77,6 +77,7 @@ static void print_u16(const void *pname, uint32_t len)
 NtfsFile::NtfsFile(Ntfs& fs) : m_fs(fs)
 {
 	m_size = 0;
+	m_alloc_size = 0;
 }
 
 NtfsFile::~NtfsFile()
@@ -113,6 +114,7 @@ bool NtfsFile::Open(const uint8_t* mft_rec)
 		return false;
 	} else if (atrh->FormCode == NONRESIDENT_FORM) {
 		m_size = atrh->Form.Nonresident.FileSize;
+		m_alloc_size = atrh->Form.Nonresident.AllocatedLength;
 		lvp = mft_rec + attr_off + atrh->Form.Nonresident.MappingPairsOffset;
 
 		m_exts.reserve(8);
@@ -159,11 +161,6 @@ void NtfsFile::Close()
 	m_exts.clear();
 }
 
-uint64_t NtfsFile::GetSize()
-{
-	return m_size;
-}
-
 void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 {
 	uint8_t *bdata = reinterpret_cast<uint8_t *>(data);
@@ -174,7 +171,7 @@ void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 	uint64_t rd_size;
 	size_t n;
 
-	if ((offset + size) > m_size)
+	if ((offset + size) > m_alloc_size)
 		return /* EINVAL */;
 
 	for (n = 0; n < m_exts.size() && size != 0; n++) {
@@ -194,8 +191,9 @@ void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 	// m_fs.m_srcdev.Read(m_fs.m_offset + ...);
 }
 
-Ntfs::Ntfs(Device& src) : m_srcdev(src)
+Ntfs::Ntfs(Device& src) : m_srcdev(src), m_blk()
 {
+	m_blksize = 0;
 }
 
 Ntfs::~Ntfs()
@@ -212,14 +210,14 @@ int Ntfs::CopyData(Device& dst)
 	BOOT_SECTOR boot;
 
 	m_srcdev.Read(&boot, sizeof(boot), 0);
-#ifdef DEBUG_VERBOSE
+#ifdef DBG_VERBOSE
 	printf("Boot:\n");
 	DumpHex(&boot, sizeof(boot));
 #endif
 
 	m_blksize = boot.Bpb.BytesPerSector * boot.Bpb.SectorsPerCluster;
 
-#ifdef DEBUG_VERBOSE
+#ifdef DBG_VERBOSE
 	printf("BytesPerSector: %04X\n", boot.Bpb.BytesPerSector);
 	printf("SecsPerCluster: %02X\n", boot.Bpb.SectorsPerCluster);
 	printf("NumberSectors:  %" PRIX64 "\n", boot.NumberSectors);
@@ -247,6 +245,7 @@ int Ntfs::CopyData(Device& dst)
 	uint8_t frec[0x400];
 	std::vector<uint8_t> bmpdata;
 	size_t n;
+	size_t bmpsize;
 	int b;
 
 	ReadBlock(boot.MftStartLcn, m_blk);
@@ -256,14 +255,17 @@ int Ntfs::CopyData(Device& dst)
 	mft.Read(frec, 0x400, 0x400 * BIT_MAP_FILE_NUMBER);
 	mft.Close();
 
+	// DumpMFTEntry(frec, 0);
+
 	FixUpdSeqRecord(frec, frec);
 
 	bitmap.Open(frec);
-	bmpdata.resize(bitmap.GetSize());
+	bmpsize = bitmap.GetSize();
+	bmpdata.resize(bitmap.GetAllocSize());
 	bitmap.Read(bmpdata.data(), bmpdata.size(), 0);
 	bitmap.Close();
 
-	for (n = 0; n < bmpdata.size(); n++) {
+	for (n = 0; n < bmpsize; n++) {
 		for (b = 0; b < 8; b++) {
 			if (bmpdata[n] & (1 << b)) {
 				ReadBlock(8 * n + b, m_blk);
@@ -275,8 +277,13 @@ int Ntfs::CopyData(Device& dst)
 #if 0
 	FILE *bmptest;
 	char name[64];
-	sprintf(name, "bitmap-%lX.dat", m_offset);
+#ifdef _MSC_VER
+	sprintf_s(name, "bitmap-%" PRIX64 ".dat", m_srcdev.GetPartitionStart());
+	fopen_s(&bmptest, name, "wb");
+#else
+	sprintf(name, "bitmap-%" PRIX64 ".dat", m_srcdev.GetPartitionStart());
 	bmptest = fopen(name, "wb");
+#endif
 	if (bmptest) {
 		fwrite(bmpdata.data(), 1, bmpdata.size(), bmptest);
 		fclose(bmptest);

@@ -114,8 +114,8 @@ int main(int argc, char *argv[])
 	// AppleSparseimage sprs;
 	VhdxDevice sprs;
 #ifdef WIN32
-	// DeviceWindows bdev;
-	VhdxDevice bdev;
+	DeviceWindows bdev;
+	// VhdxDevice bdev;
 #else
 	DeviceLinux bdev;
 #endif
@@ -134,11 +134,14 @@ int main(int argc, char *argv[])
 		return EINVAL;
 	}
 
-	if (bdev.Open(argv[1]))
+	if (!bdev.Open(argv[1]))
 	{
 		fprintf(stderr, "Unable to open device %s\n", argv[1]);
 		return ENOENT;
 	}
+
+	sprs.SetSectorSize(bdev.GetSectorSize());
+	sprs.SetSectorSizePhysical(bdev.GetSectorSizePhysical());
 
 	err = sprs.Create(argv[2], bdev.GetSize());
 	if (err) {

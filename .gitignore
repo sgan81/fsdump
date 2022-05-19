@@ -1,4 +1,10 @@
 build/
 *.kdev4
 .kdev4/
-
+.vs/
+Debug/
+Release/
+x64/
+data/
+*.diff
+*.user

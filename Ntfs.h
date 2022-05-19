@@ -24,12 +24,14 @@ public:
 	bool Open(const uint8_t *mft_rec);
 	void Close();
 	void Read(void *data, size_t size, uint64_t offset);
-	uint64_t GetSize();
+	uint64_t GetSize() const { return m_size; }
+	uint64_t GetAllocSize() const { return m_alloc_size; }
 
 private:
 	Ntfs &m_fs;
 	std::vector<Extent> m_exts;
 	uint64_t m_size;
+	uint64_t m_alloc_size;
 };
 
 class Ntfs : public FileSystem

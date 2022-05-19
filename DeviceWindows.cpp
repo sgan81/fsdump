@@ -18,6 +18,8 @@
 
 #ifdef _WIN32
 
+#include <cassert>
+#include <cstdio>
 #include "DeviceWindows.h"
 
 DeviceWindows::DeviceWindows()
@@ -36,6 +38,9 @@ bool DeviceWindows::Open(const char* name)
 	wchar_t path[MAX_PATH];
 	uint8_t buf[0x1000];
 	DWORD bytes_ret = 0;
+	const DISK_GEOMETRY_EX* geom;
+	STORAGE_PROPERTY_QUERY spq = {};
+	const STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR* saad;
 
 	// _stprintf_s(path, _T("\\\\.\\PhysicalDrive%d"), disk);
 
@@ -50,9 +55,20 @@ bool DeviceWindows::Open(const char* name)
 	if (bytes_ret == 0)
 		return false;
 
-	const DISK_GEOMETRY_EX* geom = reinterpret_cast<const DISK_GEOMETRY_EX*>(buf);
-
+	geom = reinterpret_cast<const DISK_GEOMETRY_EX*>(buf);
 	m_size = geom->DiskSize.QuadPart;
+
+	spq.PropertyId = StorageAccessAlignmentProperty;
+	spq.QueryType = PropertyStandardQuery;
+
+	DeviceIoControl(m_drive, IOCTL_STORAGE_QUERY_PROPERTY, &spq, sizeof(spq), &buf, sizeof(buf), &bytes_ret, nullptr);
+
+	if (bytes_ret == 0)
+		return false;
+
+	saad = reinterpret_cast<const STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR*>(buf);
+	SetSectorSize(saad->BytesPerLogicalSector);
+	SetSectorSizePhysical(saad->BytesPerPhysicalSector);
 
 	ResetPartitionLimits();
 
@@ -80,6 +96,8 @@ int DeviceWindows::Read(void* data, size_t size, uint64_t offset)
 
 	SetFilePointerEx(m_drive, off, nullptr, FILE_BEGIN);
 	rc = ReadFile(m_drive, data, size, &read_bytes, nullptr);
+	if (!rc)
+		printf("DeviceWindows read failed with %08X\n", GetLastError());
 
 	return rc ? 0 : EFAULT;
 }
