@@ -37,6 +37,8 @@ private:
 class Ntfs : public FileSystem
 {
 	friend class NtfsFile;
+
+	static constexpr size_t BUF_SIZE = 0x800000;
 public:
 	Ntfs(Device &src);
 	~Ntfs();
@@ -47,6 +49,7 @@ public:
 private:
 	int ReadBlock(uint64_t lcn, void *data, size_t size = 0x1000);
 	int WriteBlock(Device &dev, uint64_t lcn, const void *data, size_t size = 0x1000);
+	int CopyRange(Device& dev, uint64_t lcn, uint64_t cnt);
 	int ReadData(uint64_t pos, void *data, size_t size);
 	static bool FixUpdSeqRecord(uint8_t *out, const uint8_t *in, size_t size = 0x400);
 
@@ -55,4 +58,5 @@ private:
 	Device &m_srcdev;
 	uint32_t m_blksize;
 	uint8_t m_blk[0x1000];
+	std::vector<uint8_t> m_buf;
 };

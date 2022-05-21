@@ -194,6 +194,7 @@ void NtfsFile::Read(void* data, size_t size, uint64_t offset)
 Ntfs::Ntfs(Device& src) : m_srcdev(src), m_blk()
 {
 	m_blksize = 0;
+	m_buf.resize(BUF_SIZE);
 }
 
 Ntfs::~Ntfs()
@@ -247,6 +248,11 @@ int Ntfs::CopyData(Device& dst)
 	size_t n;
 	size_t bmpsize;
 	int b;
+	bool bmp_set;
+	uint8_t bit;
+	uint64_t num_clusters = (le64toh(boot.NumberSectors) + boot.Bpb.SectorsPerCluster) / boot.Bpb.SectorsPerCluster;
+	uint64_t bmp_run_start;
+	uint64_t bmp_run_size;
 
 	ReadBlock(boot.MftStartLcn, m_blk);
 	FixUpdSeqRecord(m_blk, m_blk);
@@ -263,8 +269,36 @@ int Ntfs::CopyData(Device& dst)
 	bmpsize = bitmap.GetSize();
 	bmpdata.resize(bitmap.GetAllocSize());
 	bitmap.Read(bmpdata.data(), bmpdata.size(), 0);
+	bmpdata.resize(bitmap.GetSize());
 	bitmap.Close();
 
+	printf("Bitmap size in bits: 0x%zX\n", 8 * bmpdata.size());
+	printf("Num Clusters: 0x%" PRIX64 "\n", num_clusters);
+
+	bmp_set = false;
+	for (n = 0; n < bmpsize; n++) {
+		for (b = 0; b < 8; b++) {
+			bit = bmpdata[n] >> b & 1;
+			if (bit && !bmp_set) {
+				bmp_set = true;
+				bmp_run_start = 8 * n + b;
+			}
+			else if (!bit && bmp_set) {
+				bmp_set = false;
+				bmp_run_size = (8 * n + b) - bmp_run_start;
+				CopyRange(dst, bmp_run_start, bmp_run_size);
+				// printf("BMP: 0x%" PRIX64 " L 0x%" PRIX64 "\n", bmp_run_start, bmp_run_size);
+			}
+		}
+	}
+	if (bmp_set) {
+		bmp_run_size = 8 * n - bmp_run_start;
+		CopyRange(dst, bmp_run_start, bmp_run_size);
+		// printf("BMP: 0x%" PRIX64 " L 0x%" PRIX64 "\n", bmp_run_start, bmp_run_size);
+	}
+
+#if 0
+	// Old slow code ...
 	for (n = 0; n < bmpsize; n++) {
 		for (b = 0; b < 8; b++) {
 			if (bmpdata[n] & (1 << b)) {
@@ -273,6 +307,7 @@ int Ntfs::CopyData(Device& dst)
 			}
 		}
 	}
+#endif
 
 #if 0
 	FILE *bmptest;
@@ -305,6 +340,28 @@ int Ntfs::WriteBlock(Device &dev, uint64_t lcn, const void *data, size_t size)
 	uint64_t off = (lcn * m_blksize);
 
 	return dev.Write(data, size, off);
+}
+
+int Ntfs::CopyRange(Device& dev, uint64_t lcn, uint64_t cnt)
+{
+	uint64_t size = cnt * m_blksize;
+	uint64_t offs = lcn * m_blksize;
+	uint64_t bksize;
+	int rc;
+
+	while (size > 0) {
+		bksize = size;
+		if (bksize > BUF_SIZE)
+			bksize = BUF_SIZE;
+		rc = m_srcdev.Read(m_buf.data(), bksize, offs);
+		if (rc) return rc;
+		rc = dev.Write(m_buf.data(), bksize, offs);
+		if (rc) return rc;
+		offs += bksize;
+		size -= bksize;
+	}
+
+	return 0;
 }
 
 int Ntfs::ReadData(uint64_t pos, void* data, size_t size)
